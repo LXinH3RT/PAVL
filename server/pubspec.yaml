@@ -1,0 +1,10 @@
+name: pavl_server
+description: PAVL - LAN media library and streaming server.
+version: 0.1.0
+publish_to: 'none'
+
+environment:
+  sdk: ^3.6.0
+
+executables:
+  pavl: pavl

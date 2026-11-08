@@ -1,0 +1,34 @@
+name: pavl_client
+description: "PAVL — Play All Videos in Lan，局域网跨设备视频播放器客户端"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.6.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 播放内核。media_kit 是 libmpv 的 Dart 封装，自带 MKV 解封装、ASS 字幕、
+  # 音轨切换与硬解，无需自研 C 内核。
+  media_kit: ^1.2.0
+  media_kit_video: ^2.0.0
+  media_kit_libs_video: ^1.0.5
+
+  # 窗口管理：普通窗口 / 全屏 / 最小尺寸约束，播放页要切全屏。
+  window_manager: ^0.4.3
+
+  # 屏幕常亮：播放时阻止系统休眠。
+  wakelock_plus: ^1.2.8
+
+  # 字体：思源黑体，避免不同机器上中文字形差异过大。
+  # 走 assets 自带，不依赖系统字体。
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

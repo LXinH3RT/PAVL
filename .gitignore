@@ -1,0 +1,18 @@
+# 构建产物
+build/
+client/build/
+dist/
+
+# Dart / Flutter
+.dart_tool/
+.packages
+client/.flutter-plugins
+client/.flutter-plugins-dependencies
+client/windows/flutter/ephemeral/
+
+# 本地交接文档：按 AgentsReadMe 规范不上传 GitHub
+AgentsReadMe.md
+
+# 日志与临时文件
+*.log
+tmp/
