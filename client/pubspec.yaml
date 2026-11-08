@@ -22,8 +22,8 @@ dependencies:
   # 屏幕常亮：播放时阻止系统休眠。
   wakelock_plus: ^1.2.8
 
-  # 字体：思源黑体，避免不同机器上中文字形差异过大。
-  # 走 assets 自带，不依赖系统字体。
+  # 字体：MiSans（可变字体），随包分发，不依赖系统字体。
+  # 声明与实现见文件末尾的 flutter.fonts 段与 lib/app.dart 的 PavlFonts。
 
 dev_dependencies:
   flutter_test:
@@ -32,3 +32,19 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # 界面字体随包分发。Windows 的系统默认字体族没有中文字形，中文会落到
+  # fallback 链上，同一句里的中文与数字因此来自两套字，字面大小与笔画粗细
+  # 对不齐；自带一份覆盖 CJK 的字体后中英混排一致。
+  #
+  # 该文件是可变字体（fvar/gvar，wght 轴 150-700），Flutter 取默认实例，
+  # 需要粗体时由引擎合成，因此不按字重拆分成多个 asset。
+  # 许可证与来源声明必须随包分发，见 assets/fonts/NOTICE.txt。
+  assets:
+    - assets/fonts/MiSans-LICENSE.txt
+    - assets/fonts/NOTICE.txt
+
+  fonts:
+    - family: MiSans
+      fonts:
+        - asset: assets/fonts/MiSansVF.ttf

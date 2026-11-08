@@ -172,6 +172,9 @@ PAVL — Play All Videos in Lan
 许可
 ----
 客户端内含 libmpv，按 LGPLv2.1+ 分发（GPL 组件已关闭）。
+客户端内含 MiSans 字体，按 Apache License 2.0 分发，
+许可证与声明见 client\\data\\flutter_assets\\assets\\fonts\\ 下的
+MiSans-LICENSE.txt 与 NOTICE.txt。
 """
 
 

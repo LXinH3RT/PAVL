@@ -1,0 +1,18 @@
+MiSans
+======
+
+文件：MiSansVF.ttf（可变字体，含 fvar / gvar 表）
+
+来源：小米 MiSans 字体，取自 https://hyperos.mi.com/font/ 的公开分发版本。
+分发许可：Apache License 2.0，全文见同目录的 MiSans-LICENSE.txt。
+
+用途：作为本程序界面的默认字体（见 client/pubspec.yaml 的 fonts 段与
+client/lib/app.dart 的 PavlFonts）。打包而不依赖系统字体，是因为 Windows
+的默认字体族没有中文字形，中文会落到 fallback 链上，导致同一句里的中文与
+数字来自两套字体，字面大小与笔画粗细不一致。
+
+范围：仅界面文字。播放页字幕由 libass 按字幕文件自带的 Fontname 绘制，
+不受此字体影响，也不应被替换。
+
+修改：未做子集化或改刻，原样分发。Apache License 2.0 允许再分发，但要求
+保留许可证与声明；本文件即为该声明。
