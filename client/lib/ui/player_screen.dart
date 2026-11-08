@@ -15,6 +15,7 @@ import '../api/pavl_client.dart';
 import '../app.dart';
 import '../player/playback_controller.dart';
 import '../store/app_store.dart';
+import '../util/app_log.dart';
 import 'widgets/control_bar.dart';
 import 'widgets/resume_prompt.dart';
 import 'widgets/track_menu.dart';
@@ -122,6 +123,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     } on PavlNetworkError catch (error) {
       if (!mounted) return;
       setState(() => _error = error.message);
+    } catch (error, stack) {
+      // 兜底：以前这里只接 Pavl 自己的两类异常，libmpv 初始化失败、原生
+      // 层异常都会逃逸成未处理错误，界面停在黑屏上什么也不显示。
+      logLine('play', '打开失败：$error');
+      logLine('play', '堆栈：${stack.toString().split('\n').take(6).join(' | ')}');
+      if (!mounted) return;
+      setState(() => _error = '播放器启动失败：$error');
     }
   }
 
@@ -283,14 +291,39 @@ class _PlayerScreenState extends State<PlayerScreen> {
               style: const TextStyle(color: PavlColors.textDim, fontSize: 13),
             ),
           ),
+          const SizedBox(height: 8),
+          Text(
+            '日志：${logFile().path}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: PavlColors.textDim, fontSize: 11),
+          ),
           const SizedBox(height: 20),
-          OutlinedButton(
-            onPressed: _exit,
-            child: const Text('返回'),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              OutlinedButton(
+                onPressed: _copyLogPath,
+                child: const Text('复制日志路径'),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton(
+                onPressed: _exit,
+                child: const Text('返回'),
+              ),
+            ],
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _copyLogPath() async {
+    await Clipboard.setData(ClipboardData(text: logFile().path));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('日志路径已复制')),
+      );
+    }
   }
 
   Widget _controlLayer() {

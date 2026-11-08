@@ -4,11 +4,15 @@
 /// 直观，所以文案要讲清楚「记录存在哪、别的设备看不看得见」。
 library;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/pavl_client.dart';
 import '../app.dart';
 import '../store/app_store.dart';
+import '../util/app_log.dart';
 
 class SettingsDialog extends StatefulWidget {
   const SettingsDialog({
@@ -31,6 +35,37 @@ class _SettingsDialogState extends State<SettingsDialog> {
     setState(() => _crossDevice = value);
     widget.store.crossDeviceProgress = value;
     await widget.store.save();
+  }
+
+  Future<void> _copyLogPath() async {
+    await Clipboard.setData(ClipboardData(text: logFile().path));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('日志路径已复制')),
+      );
+    }
+  }
+
+  /// 在资源管理器里打开日志所在目录。
+  ///
+  /// 目录可能还不存在（从没播放过），先建出来。explorer 不接受 `file:` URI，
+  /// 必须给 Windows 原生路径；打开失败时退回提示路径，不弹错误框。
+  Future<void> _openLogFolder() async {
+    try {
+      final dir = logFile().parent;
+      await dir.create(recursive: true);
+      await Process.start(
+        'explorer.exe',
+        [dir.path],
+        mode: ProcessStartMode.detached,
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('无法打开目录，请手动前往：${logFile().parent.path}')),
+        );
+      }
+    }
   }
 
   @override
@@ -66,6 +101,37 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 color: PavlColors.textDim,
                 height: 1.5,
               ),
+            ),
+            const SizedBox(height: 20),
+            _sectionTitle('排查'),
+            Text(
+              '播放出问题时，日志里会记下失败原因。点下面的按钮复制路径，'
+              '把 client.log 发过来即可定位。',
+              style: const TextStyle(
+                fontSize: 12.5,
+                color: PavlColors.textDim,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                OutlinedButton(
+                  onPressed: _copyLogPath,
+                  child: const Text('复制日志路径'),
+                ),
+                const SizedBox(width: 10),
+                OutlinedButton(
+                  onPressed: _openLogFolder,
+                  child: const Text('打开日志目录'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${logFile().path}'
+              '${File(logFile().path).existsSync() ? '' : '（还没有生成，播一次就会出现）'}',
+              style: const TextStyle(fontSize: 11, color: PavlColors.textDim),
             ),
             const SizedBox(height: 20),
             _sectionTitle('本机与服务器'),

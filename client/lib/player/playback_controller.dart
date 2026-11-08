@@ -14,6 +14,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 
 import '../api/pavl_client.dart';
 import '../store/app_store.dart';
+import '../util/app_log.dart';
 
 /// 播放器封装。
 class PlaybackController {
@@ -39,6 +40,9 @@ class PlaybackController {
       libass: true,
       // 只允许必要的协议，减少被恶意文件触发的风险面。
       protocolWhitelist: ['file', 'http', 'https', 'tcp', 'tls', 'crypto', 'data'],
+      // 默认只收 error 级。拉流失败时 libmpv 往往先在 warn/info 里说清原因
+      // （HTTP 状态码、解封装失败），单靠 error 级几乎抓不到现场。
+      logLevel: MPVLogLevel.info,
     ),
   );
 
@@ -80,6 +84,12 @@ class PlaybackController {
     return _lastTracks;
   }
 
+  /// 是否已经销毁。异步的监视任务用它提前退出，避免碰已释放的播放器。
+  bool _disposed = false;
+
+  /// 渲染/解码侧的失败原因，由日志流捕获，供超时提示使用。
+  String? _renderError;
+
   /// 播放器事件订阅，销毁时统一取消。
   final List<StreamSubscription<dynamic>> _subscriptions = [];
 
@@ -112,8 +122,28 @@ class PlaybackController {
       }
     }));
     _subscriptions.add(_player.stream.error.listen((message) {
+      logLine('mpv', 'error: $message');
       _errorController.add(message);
     }));
+
+    // libmpv 的原始日志。级别提到 info 后，拉流失败的原因（HTTP 状态码、
+    // 解封装错误、解码器初始化失败）都会出现在这里；单靠 stream.error
+    // 抓不到——media_kit 只转发少量的 error 前缀。
+    _subscriptions.add(_player.stream.log.listen((entry) {
+      if (entry.level != 'error' && entry.level != 'warn') return;
+      logLine('mpv', '${entry.level}/${entry.prefix}: ${entry.text}');
+
+      // 渲染侧的错误不走 media_kit 的转发白名单（file/ffmpeg/vd/ad/cplayer
+      // /stream 之外的都被丢掉），用户只能看到黑屏。单独记下来，超时提示
+      // 里带上，至少能判断是解码失败还是画不出来。
+      if (entry.prefix.startsWith('libmpv_render') ||
+          entry.text.contains('EGL surface') ||
+          entry.text.contains('Failed to create')) {
+        _renderError ??= entry.text;
+      }
+    }));
+
+    logLine('play', '打开 ${mediaDetail.path}（${mediaDetail.title}）');
 
     // 每 15 秒上报一次进度。太频繁会让服务端频繁写盘，太稀疏会在崩溃时丢进度。
     _reportTimer = Timer.periodic(const Duration(seconds: 15), (_) {
@@ -124,13 +154,20 @@ class PlaybackController {
   /// 打开媒体并从头或指定位置开始播放。
   Future<void> open({Duration? startAt}) async {
     final uri = client.streamUri(mediaDetail.path);
-    await _player.open(
-      Media(
-        uri.toString(),
-        httpHeaders: client.mediaHeaders,
-      ),
-      play: true,
-    );
+    logLine('play', '拉流 ${redactUri(uri)} 起点=$startAt');
+    final stopwatch = Stopwatch()..start();
+    try {
+      await _player.open(
+        Media(
+          uri.toString(),
+          httpHeaders: client.mediaHeaders,
+        ),
+        play: true,
+      );
+    } catch (error) {
+      logLine('play', 'open 失败：$error');
+      rethrow;
+    }
 
     if (startAt != null && startAt > Duration.zero) {
       await _player.seek(startAt);
@@ -141,6 +178,108 @@ class PlaybackController {
     // 不 await：切轨会让解码器重开一次，如果在 open 之后立刻切，画面会卡在
     // 黑屏（位置停在 0 不动）。让播放先真正跑起来再切。
     unawaited(_restoreTrackPreference());
+
+    // 10 秒还拿不到时长，说明解封装没有完成。此时画面是全黑的，用户除了
+    // 「打不开」什么也说不出，直接把现场写进日志，并把提示送到界面。
+    unawaited(_watchFirstFrame(stopwatch));
+  }
+
+  /// 超时监视：解封装成功后，再确认视频帧是否真的解码出来了。
+  ///
+  /// 与之相对，[VideoParams] 在一帧解出来之前是空的。显卡驱动异常时，
+  /// 时长与轨道都正常，画面却一直是黑的——这种情况用户完全说不出原因，
+  /// 只能靠这里的判定把话讲清楚。
+  Future<void> _watchFirstPicture(Stopwatch stopwatch) async {
+    for (var i = 0; i < 40; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (_disposed) return;
+      final params = _player.state.videoParams;
+      if (params.w != null && params.w! > 0) {
+        logLine(
+          'play',
+          '首帧就绪，用时 ${stopwatch.elapsedMilliseconds} ms，'
+              '${params.w}x${params.h} ${params.pixelformat ?? ''}',
+        );
+        return;
+      }
+    }
+    if (_disposed) return;
+    final render = _renderError;
+    logLine(
+      'play',
+      '解封装成功但 10 秒内没有解出画面'
+          '${render == null ? '' : '（$render）'}',
+    );
+    _errorController.add(
+      render == null
+          ? '视频已读取，但画面始终没有出来。这通常是显卡驱动或渲染初始化的问题，'
+              '详细原因已写入日志。'
+          : '视频已读取，但画面渲染失败：「$render」。'
+              '这通常是显卡驱动或硬件解码的问题，详细原因已写入日志。',
+    );
+  }
+
+  /// 超时监视：确认 libmpv 是否真的开始了解封装。
+  ///
+  /// 判超时不能只看时间：局域网慢或文件很大时，libmpv 会先缓冲一段再解析，
+  /// 固定 10 秒会把「还在加载」误判成「加载失败」。这里先等 10 秒，若期间
+  /// 观察到任何进展（有缓冲、位置在走、状态是播放中），就宽限到 30 秒。
+  Future<void> _watchFirstFrame(Stopwatch stopwatch) async {
+    const softTimeout = Duration(seconds: 10);
+    const hardTimeout = Duration(seconds: 30);
+    var waited = Duration.zero;
+    var extended = false;
+
+    while (waited < hardTimeout) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      waited += const Duration(milliseconds: 250);
+      if (_disposed) return;
+
+      final state = _player.state;
+      if (state.duration > Duration.zero) {
+        logLine(
+          'play',
+          '解封装完成，用时 ${stopwatch.elapsedMilliseconds} ms，'
+              '时长 ${state.duration}，'
+              '视频轨 ${state.tracks.video.length}，'
+              '音频轨 ${state.tracks.audio.length}',
+        );
+        // 解封装成功不等于画得出来：显卡侧创建渲染表面失败时，时长、轨道
+        // 都正常，画面却始终是黑的。再等一小会儿看视频参数有没有填上。
+        unawaited(_watchFirstPicture(stopwatch));
+        return;
+      }
+
+      // 缓冲位置在推进才是真的「还在加载」；playing 在命令下发就是真，
+      // 用它当进度会退化成无条件放宽到 30 秒。缓冲位置在推进说明数据
+      // 确实在进来，把时限放宽，避免慢速网络被当成故障。
+      if (!extended && waited >= softTimeout && state.buffer > Duration.zero) {
+        extended = true;
+        logLine(
+          'play',
+          '10 秒内还没解析出时长，但数据仍在进来'
+              '（已缓冲 ${state.buffer}，缓冲中=${state.buffering}），'
+              '继续等到 30 秒',
+        );
+      }
+      if (!extended && waited >= softTimeout) break;
+    }
+
+    if (_disposed) return;
+    final state = _player.state;
+    final detail = '时长=${state.duration} / 缓冲=${state.buffer} / '
+        '播放中=${state.playing} / 缓冲中=${state.buffering}';
+    logLine('play', '${waited.inSeconds} 秒内未拿到时长，放弃等待（$detail）');
+    final render = _renderError;
+    _errorController.add(
+      render == null
+          ? '无法开始播放：服务端在 ${waited.inSeconds} 秒内没有返回可解析的媒体数据。'
+              '请确认服务端仍在运行、防火墙没有拦住端口，'
+              '详细原因已写入日志。'
+          : '无法开始播放：解码器报告「$render」。'
+              '这通常是显卡驱动或硬件解码初始化失败，'
+              '详细原因已写入日志。',
+    );
   }
 
   /// 等到播放真正开始（有时长且轨道已就绪）。
@@ -342,6 +481,8 @@ class PlaybackController {
 
   /// 退出前调用：停止定时器、最后一次上报、释放播放器。
   Future<void> dispose() async {
+    _disposed = true;
+    logLine('play', '关闭播放器，停在 $position / $duration');
     _reportTimer?.cancel();
     _reportTimer = null;
     await _reportProgress(force: true);
