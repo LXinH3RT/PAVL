@@ -1,7 +1,7 @@
 /// 本地持久化：服务器列表、设备身份、每部片的音轨字幕偏好。
 ///
-/// 用 JSON 文件存，不引第三方依赖。位置在系统的应用数据目录下，
-/// 卸载应用时不会被一并删除，重装后配对状态还在。
+/// 用 JSON 文件存，不引第三方依赖。位置优先取可执行文件同级的
+/// `PAVL-data/`（便携），该目录不可写时才退回系统的应用数据目录。
 library;
 
 import 'dart:convert';
@@ -9,8 +9,48 @@ import 'dart:io';
 
 import '../api/pavl_client.dart';
 
+/// 便携目录名：放在可执行文件旁边，整个文件夹拷走就能带着配对状态。
+///
+/// 不能叫 `data`：Flutter 自己的资源目录就叫 `data`（app.so、flutter_assets
+/// 都在里面），混在一起容易被清理工具误删。
+const String portableDirName = 'PAVL-data';
+
+Directory? _resolvedDataDir;
+
 /// 应用数据目录。
+///
+/// 优先用可执行文件同级的 `PAVL-data/`：便携版整包复制后配对状态、播放进度
+/// 偏好、日志都跟着走，也不会因为用户配置目录不可写而失败。该目录建不出来
+/// （装到只读位置、exe 放在 Program Files 下但没有权限）时，退回系统配置目录。
 Directory appDataDir() {
+  final cached = _resolvedDataDir;
+  if (cached != null) return cached;
+
+  final portable = Directory(
+    '${File(Platform.resolvedExecutable).parent.path}'
+    '${Platform.pathSeparator}$portableDirName',
+  );
+  if (_ensureWritable(portable)) {
+    _resolvedDataDir = portable;
+    return portable;
+  }
+
+  final legacy = legacyDataDir();
+  try {
+    legacy.createSync(recursive: true);
+  } catch (_) {
+    // 连系统配置目录都建不出来时只能退回临时目录，至少不让启动崩掉。
+    _resolvedDataDir = Directory.systemTemp;
+    return _resolvedDataDir!;
+  }
+  _resolvedDataDir = legacy;
+  return legacy;
+}
+
+/// 旧版本的配置目录（%APPDATA%\PAVL 等）。
+///
+/// 只用于把老用户的 client.json 迁移到便携目录，不再作为主存储位置。
+Directory legacyDataDir() {
   final env = Platform.environment;
   final String base;
   if (Platform.isWindows) {
@@ -21,6 +61,34 @@ Directory appDataDir() {
     base = env['XDG_CONFIG_HOME'] ?? '${env['HOME'] ?? '.'}/.config';
   }
   return Directory('$base${Platform.pathSeparator}PAVL');
+}
+
+/// 临时文件目录。
+///
+/// 不直接用 [Directory.systemTemp]：某些机器上 TEMP/TMP 没配好，Windows 会
+/// 回退到 C:\WINDOWS\TEMP，普通用户写不进去。播放内核会在这个目录里建播放
+/// 列表与字幕临时文件，写不进去就等于任何片都打不开。
+Directory appTempDir() {
+  final dir =
+      Directory('${appDataDir().path}${Platform.pathSeparator}temp');
+  try {
+    dir.createSync(recursive: true);
+  } catch (_) {
+    // 建不出来时也返回路径，调用方自己去处理失败。
+  }
+  return dir;
+}
+
+bool _ensureWritable(Directory dir) {
+  try {
+    dir.createSync(recursive: true);
+    final probe = File('${dir.path}${Platform.pathSeparator}.writable');
+    probe.writeAsStringSync('', flush: false);
+    probe.deleteSync();
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 /// 一部片的音轨字幕偏好。
@@ -81,10 +149,27 @@ class AppStore {
     final dir = appDataDir();
     await dir.create(recursive: true);
     final file = File('${dir.path}${Platform.pathSeparator}client.json');
+    if (!await file.exists()) await _migrateLegacyConfig(file);
     final store = AppStore._(file);
     await store._read();
     _instance = store;
     return store;
+  }
+
+  /// 把老版本存在 %APPDATA%\PAVL 的配置搬到便携目录。
+  ///
+  /// 只在便携目录里还没有配置时搬一次；搬完保留旧文件不删，用户回退到老
+  /// 版本时配对状态还在。
+  static Future<void> _migrateLegacyConfig(File target) async {
+    try {
+      final legacy =
+          File('${legacyDataDir().path}${Platform.pathSeparator}client.json');
+      if (await legacy.exists()) {
+        await target.writeAsString(await legacy.readAsString(), flush: true);
+      }
+    } catch (_) {
+      // 迁移失败就当没有旧配置，用空配置起步。
+    }
   }
 
   Future<void> _read() async {

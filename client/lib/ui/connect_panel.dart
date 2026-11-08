@@ -1,9 +1,12 @@
-/// 连接面板：发现进度、服务器列表、地址与 PIN 一步连上。
+/// 连接面板：发现到的服务器、地址与 PIN 一步连上。
 ///
 /// 早期版本是「选服务器 → 下一页再输 PIN」两段式，实际用起来很别扭：
 /// PIN 就在服务端托盘上摆着，却要先跳一层才让填。这里把地址和 PIN 并排放
 /// 在主界面，点发现的服务器只负责把地址填进输入框，用户补齐 PIN 后一次连接
 /// 完成配对，全程不换页。
+///
+/// 界面上只留「能直接操作的东西」：发现结果、地址、PIN、连接按钮。局域网
+/// 搜索是启动时自动做的，不需要一个「重新搜索」按钮去提示用户点。
 library;
 
 import 'package:flutter/material.dart';
@@ -12,26 +15,21 @@ import 'package:flutter/services.dart';
 import '../api/discovery.dart';
 import '../api/pavl_client.dart';
 import '../app.dart';
+import '../util/app_log.dart';
 
 /// 连接面板。
 class ConnectPanel extends StatefulWidget {
   const ConnectPanel({
     super.key,
-    required this.phase,
-    required this.statusText,
     required this.servers,
     required this.savedServers,
     required this.deviceId,
     required this.deviceName,
-    required this.onDiscover,
     required this.onConnected,
     required this.onPickSaved,
-    required this.onForget,
   });
 
-  /// 当前阶段名，与 HomeScreen 的 _Phase 对应。
-  final String phase;
-  final String statusText;
+  /// 局域网里发现到的服务器。
   final List<DiscoveredServer> servers;
 
   /// 已经配对过的服务器，带令牌，点一下就能直接进。
@@ -40,15 +38,11 @@ class ConnectPanel extends StatefulWidget {
   final String deviceId;
   final String deviceName;
 
-  final VoidCallback onDiscover;
-
   /// 地址与 PIN 都验证通过后回调，参数是带令牌的连接。
   final ValueChanged<ServerConnection> onConnected;
 
   /// 点已保存服务器的回调（令牌仍然有效时）。
   final ValueChanged<ServerConnection> onPickSaved;
-
-  final ValueChanged<String> onForget;
 
   @override
   State<ConnectPanel> createState() => _ConnectPanelState();
@@ -71,9 +65,6 @@ class _ConnectPanelState extends State<ConnectPanel> {
     super.dispose();
   }
 
-  bool get _searching =>
-      widget.phase == 'probing' || widget.phase == 'discovering';
-
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -82,9 +73,7 @@ class _ConnectPanelState extends State<ConnectPanel> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _header(),
-          const SizedBox(height: 28),
-          _status(),
-          const SizedBox(height: 24),
+          const SizedBox(height: 32),
           if (widget.servers.isNotEmpty) ...[
             _sectionTitle('局域网里发现的服务器'),
             const SizedBox(height: 8),
@@ -94,8 +83,6 @@ class _ConnectPanelState extends State<ConnectPanel> {
           _sectionTitle('连接服务器'),
           const SizedBox(height: 8),
           _connectForm(),
-          const SizedBox(height: 28),
-          _savedList(),
         ],
       ),
     );
@@ -137,51 +124,6 @@ class _ConnectPanelState extends State<ConnectPanel> {
           ],
         ),
       ],
-    );
-  }
-
-  Widget _status() {
-    final failed = widget.phase == 'failed';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: PavlColors.surface,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: failed
-              ? PavlColors.danger.withValues(alpha: 0.4)
-              : PavlColors.border,
-        ),
-      ),
-      child: Row(
-        children: [
-          if (_searching)
-            const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          else
-            Icon(
-              failed ? Icons.error_outline : Icons.wifi_tethering,
-              size: 18,
-              color: failed ? PavlColors.danger : PavlColors.success,
-            ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              widget.statusText,
-              style: const TextStyle(fontSize: 14),
-            ),
-          ),
-          if (!_searching)
-            TextButton.icon(
-              onPressed: widget.onDiscover,
-              icon: const Icon(Icons.refresh, size: 16),
-              label: const Text('重新搜索'),
-            ),
-        ],
-      ),
     );
   }
 
@@ -247,7 +189,7 @@ class _ConnectPanelState extends State<ConnectPanel> {
                 enabled: !_busy,
                 decoration: const InputDecoration(
                   labelText: '服务器地址',
-                  hintText: '留空则在局域网里自动搜索',
+                  hintText: '留空则在局域网里自动找',
                   isDense: true,
                   border: OutlineInputBorder(),
                 ),
@@ -307,8 +249,7 @@ class _ConnectPanelState extends State<ConnectPanel> {
         ),
         const SizedBox(height: 8),
         Text(
-          _error ??
-              '地址可以留空（端口会忽略），此时只在局域网里找；PIN 在服务端托盘菜单里。',
+          _error ?? '地址可以留空，此时只在局域网里找；PIN 在服务端托盘菜单里。',
           style: TextStyle(
             fontSize: 12,
             color: _error != null ? PavlColors.danger : PavlColors.textDim,
@@ -385,6 +326,7 @@ class _ConnectPanelState extends State<ConnectPanel> {
           deviceName: widget.deviceName,
           platform: 'windows',
         );
+        logLine('net', '配对成功 ${server.host}:${server.port}');
         if (!mounted) return;
         widget.onConnected(
           ServerConnection(
@@ -399,6 +341,7 @@ class _ConnectPanelState extends State<ConnectPanel> {
         client.close();
       }
     } on PavlApiError catch (error) {
+      logLine('net', '配对被拒绝：${error.code} ${error.message}');
       if (!mounted) return;
       setState(() {
         _error = switch (error.code) {
@@ -408,58 +351,15 @@ class _ConnectPanelState extends State<ConnectPanel> {
         };
       });
     } on PavlNetworkError catch (error) {
+      logLine('net', '配对网络错误：${error.message}');
       if (!mounted) return;
       setState(() => _error = error.message);
+    } catch (error) {
+      logLine('net', '配对异常：$error');
+      if (!mounted) return;
+      setState(() => _error = '连接失败：$error');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-  }
-
-  Widget _savedList() {
-    if (widget.savedServers.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _sectionTitle('已保存的服务器'),
-        const SizedBox(height: 8),
-        ...widget.savedServers.map(
-          (conn) => Container(
-            margin: const EdgeInsets.only(bottom: 6),
-            decoration: BoxDecoration(
-              color: PavlColors.surface,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: PavlColors.border),
-            ),
-            child: ListTile(
-              dense: true,
-              leading: const Icon(Icons.history, size: 18),
-              title: Text(conn.name, style: const TextStyle(fontSize: 14)),
-              subtitle: Text(
-                '${conn.host}:${conn.port}'
-                '${conn.hasToken ? '' : '  ·  未配对'}',
-                style:
-                    const TextStyle(fontSize: 12, color: PavlColors.textDim),
-              ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextButton(
-                    onPressed: () => widget.onPickSaved(conn),
-                    child: Text(conn.hasToken ? '进入' : '连接'),
-                  ),
-                  IconButton(
-                    tooltip: '忘记此服务器',
-                    iconSize: 16,
-                    onPressed: () => widget.onForget(conn.serverId),
-                    icon: const Icon(Icons.close, color: PavlColors.textDim),
-                  ),
-                ],
-              ),
-              onTap: () => widget.onPickSaved(conn),
-            ),
-          ),
-        ),
-      ],
-    );
   }
 }

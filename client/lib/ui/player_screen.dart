@@ -246,14 +246,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
             children: [
               _videoLayer(),
               // 控制层：用 IgnorePointer 让隐藏时鼠标事件穿透到画面。
-              IgnorePointer(
-                ignoring: !_controlsVisible,
-                child: AnimatedOpacity(
-                  opacity: _controlsVisible ? 1 : 0,
-                  duration: const Duration(milliseconds: 200),
-                  child: _controlLayer(),
+              //
+              // 出错时整个控制层都不挂：它的渐变 Container 铺满全屏，鼠标一
+              // 移进来 _showControls() 就把 _controlsVisible 置真，点击会被
+              // 这层吃掉，错误页上的按钮就点不动了。
+              if (_error == null)
+                IgnorePointer(
+                  ignoring: !_controlsVisible,
+                  child: AnimatedOpacity(
+                    opacity: _controlsVisible ? 1 : 0,
+                    duration: const Duration(milliseconds: 200),
+                    child: _controlLayer(),
+                  ),
                 ),
-              ),
             ],
           ),
         ),

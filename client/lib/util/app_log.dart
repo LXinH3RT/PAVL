@@ -2,7 +2,10 @@
 ///
 /// 客户端平时不写盘，只在出问题时留证据：播放失败时如果连 libmpv 的报错
 /// 都看不到，用户只能描述成「全黑」，无从排查。这里把关键事件按行追加到
-/// `%APPDATA%/PAVL/client.log`，出问题时让用户把文件发过来即可。
+/// 可执行文件同级 `PAVL-data/client.log`，出问题时让用户把文件发过来即可。
+///
+/// 放在便携目录而不是 %APPDATA%，是为了「整个文件夹拷走就能带走现场」，
+/// 也避开某些机器上用户配置目录不可写的情况。
 ///
 /// 约束：
 ///   - 不引第三方依赖，只用 dart:io。
@@ -14,7 +17,7 @@ import 'dart:io';
 
 import '../store/app_store.dart';
 
-/// 日志文件路径：与应用数据放在一起。
+/// 日志文件路径：与应用数据放在一起（便携目录）。
 File logFile() =>
     File('${appDataDir().path}${Platform.pathSeparator}client.log');
 

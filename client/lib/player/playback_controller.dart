@@ -136,9 +136,11 @@ class PlaybackController {
       // 渲染侧的错误不走 media_kit 的转发白名单（file/ffmpeg/vd/ad/cplayer
       // /stream 之外的都被丢掉），用户只能看到黑屏。单独记下来，超时提示
       // 里带上，至少能判断是解码失败还是画不出来。
+      // 只认渲染侧自己的报错。mkv 解封装器也会报 "Failed to create file
+      // cache."（无害，画面照样出得来），按子串匹配会把它误当成渲染故障。
       if (entry.prefix.startsWith('libmpv_render') ||
           entry.text.contains('EGL surface') ||
-          entry.text.contains('Failed to create')) {
+          entry.text.contains('Failed to create EGL')) {
         _renderError ??= entry.text;
       }
     }));

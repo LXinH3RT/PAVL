@@ -1,9 +1,12 @@
-/// 主页：服务器连接状态 + 浏览入口。
+/// 主页：启动探测 + 连接面板。
 ///
-/// 启动流程分三种情况：
-///   1. 有缓存服务器 → 直接探测，通则立刻进入浏览
-///   2. 缓存失效 → 自动广播一次，边收边展示
-///   3. 都失败 → 引导手动输入 IP 或重试
+/// 启动流程只有两步：
+///   1. 有上次用的服务器 → 直接探活，通则立刻进浏览页
+///   2. 探不通或没有记录 → 后台广播一轮，把结果填进面板；只有一台且已配对
+///      时直接进去，多台就交给用户点
+///
+/// 界面上不出现「正在搜索」「找到 N 台」这类过程文案：局域网搜索是后台自己
+/// 做的事，用户只需要看见能点的服务器和输入框。
 library;
 
 import 'dart:async';
@@ -26,11 +29,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-enum _Phase { probing, discovering, ready, failed }
-
 class _HomeScreenState extends State<HomeScreen> {
-  _Phase _phase = _Phase.probing;
-  String _statusText = '正在连接上次使用的服务器…';
   final List<DiscoveredServer> _found = [];
   DiscoverySession? _session;
 
@@ -46,12 +45,17 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  /// 启动流程：先试缓存地址，再广播。
+  /// 先试上次的地址，再静默广播。
   Future<void> _bootstrap() async {
     final last = widget.store.lastServer;
     if (last != null) {
       final probed = await probeHost(last.host, last.port);
       if (probed != null && mounted) {
+        // 有令牌就一步到位，没有就让用户在面板里补 PIN。
+        if (last.hasToken) {
+          await _enterConnection(last);
+          return;
+        }
         await _enterServer(probed);
         return;
       }
@@ -61,38 +65,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _startDiscovery() async {
     _session?.dispose();
-    setState(() {
-      _phase = _Phase.discovering;
-      _found.clear();
-      _statusText = '正在局域网内搜索 PAVL 服务器…';
-    });
-
     final session = DiscoverySession();
     _session = session;
     final results = await session.run(onFound: (server) {
       if (!mounted) return;
-      setState(() {
-        _found.add(server);
-        _statusText = '发现 ${_found.length} 台服务器';
-      });
+      setState(() => _found.add(server));
     });
-
     if (!mounted) return;
-    setState(() {
-      if (results.isEmpty) {
-        _phase = _Phase.failed;
-        _statusText = '没有找到 PAVL 服务器';
-      } else if (results.length == 1) {
-        _phase = _Phase.ready;
-        _statusText = '找到 ${results.first.name}';
-      } else {
-        _phase = _Phase.ready;
-        _statusText = '找到 ${results.length} 台服务器，请选择';
-      }
-    });
 
-    // 只有一台就自动进入。
-    if (results.length == 1) {
+    // 只发现一台且已经配对过，就不必让用户再点一次。
+    if (results.length == 1 && widget.store.serverById(results.first.serverId)?.hasToken == true) {
       await _enterServer(results.first);
     }
   }
@@ -123,7 +105,8 @@ class _HomeScreenState extends State<HomeScreen> {
         port: server.port,
       );
       await widget.store.upsertServer(connection);
-    } else if (connection.host != server.host || connection.port != server.port) {
+    } else if (connection.host != server.host ||
+        connection.port != server.port) {
       // 服务器换了 IP（DHCP 续租常见），更新地址但保留令牌。
       connection = connection.copyWith(host: server.host, port: server.port);
       await widget.store.upsertServer(connection);
@@ -149,19 +132,12 @@ class _HomeScreenState extends State<HomeScreen> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 720),
           child: ConnectPanel(
-            phase: _phase.name,
-            statusText: _statusText,
             servers: _found,
             savedServers: widget.store.servers,
             deviceId: widget.store.deviceId,
             deviceName: widget.store.deviceName,
-            onDiscover: _startDiscovery,
             onConnected: _enterConnection,
             onPickSaved: _enterConnection,
-            onForget: (serverId) async {
-              await widget.store.removeServer(serverId);
-              if (mounted) setState(() {});
-            },
           ),
         ),
       ),
