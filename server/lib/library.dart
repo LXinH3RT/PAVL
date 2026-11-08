@@ -150,6 +150,47 @@ class _PendingFile {
   final MediaKind kind;
 }
 
+/// 列目录时暂存的子目录，等待「是否含媒体」判定。
+class _PendingDir {
+  _PendingDir({
+    required this.name,
+    required this.relativePath,
+    required this.absPath,
+  });
+
+  final String name;
+  final String relativePath;
+  final String absPath;
+}
+
+/// 一个子目录的探测结果。
+class _DirProbe {
+  _DirProbe({
+    required this.hasMedia,
+    required this.childCount,
+    required this.at,
+  });
+
+  /// 子树里是否存在视频或音频文件。
+  final bool hasMedia;
+
+  /// 直接子条目里「会出现在浏览列表中的」数量。
+  final int childCount;
+
+  /// 探测时间，用于缓存过期。
+  final DateTime at;
+}
+
+/// 递归探测的读取预算，防止某个巨型目录把一次浏览拖成几十秒。
+class _ProbeBudget {
+  _ProbeBudget(this._left);
+
+  int _left;
+
+  /// 用掉一次读取额度；返回 true 表示额度已耗尽，调用方应停止下钻。
+  bool spend() => --_left <= 0;
+}
+
 /// 片库索引服务。
 ///
 /// 采用「按需扫描 + 内存缓存」：首次浏览某目录时同步扫描并缓存，
@@ -161,6 +202,12 @@ class Library {
 
   /// 相对路径 → 目录项缓存。
   final Map<String, _DirCache> _dirs = {};
+
+  /// 子目录「子树里是否含媒体」的探测结果。
+  ///
+  /// 目录浏览要跳过不含视频的目录（例如和影片放在一起的软件安装目录），
+  /// 判定需要递归看文件扩展名；结果按目录缓存，避免每次浏览都重扫。
+  final Map<String, _DirProbe> _probes = {};
 
   /// 全库视频索引，`refreshAll()` 时整体重建。
   List<MediaEntry>? _allMedia;
@@ -179,6 +226,7 @@ class Library {
   /// 清空缓存，强制下次重新扫描。
   void invalidate() {
     _dirs.clear();
+    _probes.clear();
     _allMedia = null;
     _allMediaAt = null;
   }
@@ -242,16 +290,32 @@ class Library {
   /// 浏览某个目录。`relPath` 为空表示根列表。
   Future<List<BrowseEntry>> browse(String relPath, {String sort = 'name'}) async {
     if (relPath.isEmpty) {
-      return [
+      final roots = <_PendingDir>[
         for (final root in config.roots)
           if (Directory(root.path).existsSync())
-            BrowseEntry(
+            _PendingDir(
               name: root.displayName,
               relativePath: root.displayName,
-              isDir: true,
-              childCount: _cachedChildCount(root.displayName, root.path),
+              absPath: root.path,
             ),
-      ]..sort((a, b) => naturalCompare(a.name, b.name));
+      ];
+      final probes = await _probeDirs(roots);
+      final list = <BrowseEntry>[];
+      for (var i = 0; i < roots.length; i++) {
+        // 根目录同样遵守「没有视频就不显示」的规则；全部为空时至少保留一条，
+        // 否则客户端会看到一片空白，连出了什么问题都不知道。
+        if (config.hideEmptyDirs && !probes[i].hasMedia && roots.length > 1) {
+          continue;
+        }
+        list.add(BrowseEntry(
+          name: roots[i].name,
+          relativePath: roots[i].relativePath,
+          isDir: true,
+          childCount: probes[i].childCount,
+        ));
+      }
+      list.sort((a, b) => naturalCompare(a.name, b.name));
+      return list;
     }
 
     final abs = resolveAbsolute(relPath);
@@ -266,17 +330,17 @@ class Library {
 
     final entries = <BrowseEntry>[];
     final files = <_PendingFile>[];
+    final dirs = <_PendingDir>[];
     try {
       await for (final entity in dir.list(followLinks: false)) {
         final name = _baseName(entity.path);
         if (name.startsWith('.')) continue;
         final childRel = '$relPath/$name';
         if (entity is Directory) {
-          entries.add(BrowseEntry(
+          dirs.add(_PendingDir(
             name: name,
             relativePath: childRel,
-            isDir: true,
-            childCount: 0,
+            absPath: entity.path,
           ));
         } else if (entity is File) {
           final kind = kindOf(name);
@@ -294,6 +358,20 @@ class Library {
     } on FileSystemException {
       // 权限不足或无权限的目录直接当作空目录，不向客户端抛错。
       return const [];
+    }
+
+    // 子目录先探测「子树里有没有视频/音频」，再决定是否进入列表。
+    // 影片目录旁边常常混着软件目录、资料目录，它们在客户端点进去只会是空的。
+    final probes = await _probeDirs(dirs);
+    for (var i = 0; i < dirs.length; i++) {
+      final probe = probes[i];
+      if (config.hideEmptyDirs && !probe.hasMedia) continue;
+      entries.add(BrowseEntry(
+        name: dirs[i].name,
+        relativePath: dirs[i].relativePath,
+        isDir: true,
+        childCount: probe.childCount,
+      ));
     }
 
     // 字幕挂到视频下面，不平铺。
@@ -388,9 +466,158 @@ class Library {
     return _sortEntries(entries, sort);
   }
 
-  int _cachedChildCount(String relPath, String absPath) {
-    final cache = _dirs[relPath];
-    return cache?.entries.length ?? 0;
+  /// 批量探测子目录：命中缓存就直接用，未命中的并发探测。
+  ///
+  /// `hideEmptyDirs` 关闭时不做递归下钻，只数一层，列表保持完整文件树。
+  Future<List<_DirProbe>> _probeDirs(List<_PendingDir> dirs) async {
+    if (!config.hideEmptyDirs) {
+      final counted = <_DirProbe>[];
+      const shallowLimit = 8;
+      for (var start = 0; start < dirs.length; start += shallowLimit) {
+        final end =
+            (start + shallowLimit) > dirs.length ? dirs.length : start + shallowLimit;
+        counted.addAll(await Future.wait([
+          for (final i in List.generate(end - start, (k) => start + k))
+            _countShallow(dirs[i]),
+        ]));
+      }
+      return counted;
+    }
+    final now = DateTime.now();
+    const ttl = Duration(minutes: 5);
+    final out = List<_DirProbe?>.filled(dirs.length, null);
+    final pending = <int>[];
+    for (var i = 0; i < dirs.length; i++) {
+      final cached = _probes[_probeKey(dirs[i].absPath)];
+      if (cached != null && now.difference(cached.at) < ttl) {
+        out[i] = cached;
+      } else {
+        pending.add(i);
+      }
+    }
+    if (pending.isNotEmpty) {
+      // 并发度限制在 8：机械盘上开太多并发反而更慢。
+      const limit = 8;
+      for (var start = 0; start < pending.length; start += limit) {
+        final end =
+            (start + limit) > pending.length ? pending.length : start + limit;
+        final batch = pending.sublist(start, end);
+        final results = await Future.wait([
+          for (final i in batch) _probeDir(dirs[i]),
+        ]);
+        for (var k = 0; k < batch.length; k++) {
+          final probe = results[k];
+          _probes[_probeKey(dirs[batch[k]].absPath)] = probe;
+          out[batch[k]] = probe;
+        }
+      }
+    }
+    return [for (final p in out) p!];
+  }
+
+  /// 探测结果的缓存键：绝对路径规范化后统一小写。
+  static String _probeKey(String absPath) => _normalize(absPath);
+
+  /// 只数一层，不做「子树里有没有媒体」的判定。
+  ///
+  /// 关闭 `hideEmptyDirs` 时用，用来给出目录行尾的条目数。
+  Future<_DirProbe> _countShallow(_PendingDir dir) async {
+    var childCount = 0;
+    try {
+      await for (final entity in Directory(dir.absPath).list(followLinks: false)) {
+        final name = _baseName(entity.path);
+        if (name.startsWith('.')) continue;
+        if (entity is File) {
+          if (kindOf(name) == MediaKind.other) continue;
+          childCount++;
+        } else if (entity is Directory) {
+          childCount++;
+        }
+      }
+    } on FileSystemException {
+      // 读不到就当作「可显示」，不要因为一次权限错误把目录藏起来。
+      return _DirProbe(hasMedia: true, childCount: childCount, at: DateTime.now());
+    }
+    return _DirProbe(hasMedia: true, childCount: childCount, at: DateTime.now());
+  }
+
+  /// 判断一个目录是否「值得显示」，并数出会显示出来的直接子条目数量。
+  ///
+  /// 只列一层就能拿到计数：文件直接计入，子目录则逐个做一次带提前退出的
+  /// 向下搜索。任何一层找到视频/音频就停，所以有媒体的目录代价很小；只有
+  /// 整棵子树都没有媒体时才会走满，那是少数小目录。
+  Future<_DirProbe> _probeDir(_PendingDir dir) async {
+    final budget = _ProbeBudget(20000);
+    var childCount = 0;
+    var hasMedia = false;
+    var exhausted = false;
+    final subdirs = <String>[];
+    try {
+      await for (final entity in Directory(dir.absPath).list(followLinks: false)) {
+        if (budget.spend()) {
+          exhausted = true;
+          break;
+        }
+        final name = _baseName(entity.path);
+        if (name.startsWith('.')) continue;
+        if (entity is File) {
+          final kind = kindOf(name);
+          if (kind == MediaKind.other) continue;
+          childCount++;
+          if (kind == MediaKind.video || kind == MediaKind.audio) {
+            hasMedia = true;
+          }
+        } else if (entity is Directory) {
+          subdirs.add(entity.path);
+        }
+      }
+    } on FileSystemException {
+      // 读不到就当作「可显示」，不要因为一次权限错误把目录藏起来。
+      return _DirProbe(hasMedia: true, childCount: childCount, at: DateTime.now());
+    }
+
+    if (!exhausted) {
+      for (final sub in subdirs) {
+        if (await _hasMediaDeep(sub, budget)) {
+          childCount++;
+          hasMedia = true;
+        }
+      }
+    }
+    return _DirProbe(
+      // 预算耗尽说明没看完，此时宁可多显示也不误藏。
+      hasMedia: hasMedia || exhausted,
+      childCount: childCount,
+      at: DateTime.now(),
+    );
+  }
+
+  /// 向下搜索某个目录，找到第一个视频/音频就返回 true。
+  ///
+  /// 预算耗尽时返回 true：宁可多显示一个空目录，也不要把真有内容的目录藏掉。
+  Future<bool> _hasMediaDeep(String absPath, _ProbeBudget budget) async {
+    final stack = <String>[absPath];
+    while (stack.isNotEmpty) {
+      final current = stack.removeLast();
+      final deeper = <String>[];
+      try {
+        await for (final entity in Directory(current).list(followLinks: false)) {
+          if (budget.spend()) return true;
+          final name = _baseName(entity.path);
+          if (name.startsWith('.')) continue;
+          if (entity is File) {
+            final kind = kindOf(name);
+            if (kind == MediaKind.video || kind == MediaKind.audio) return true;
+          } else if (entity is Directory) {
+            deeper.add(entity.path);
+          }
+        }
+      } on FileSystemException {
+        continue;
+      }
+      stack.addAll(deeper.reversed);
+    }
+    return false;
   }
 
   List<BrowseEntry> _sortEntries(List<BrowseEntry> entries, String sort) {

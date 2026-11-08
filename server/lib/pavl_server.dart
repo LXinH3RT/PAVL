@@ -639,6 +639,9 @@ class PavlServer {
           request, HttpStatus.methodNotAllowed, 'method_not_allowed', '需要 POST');
       return;
     }
+    // 目录队列与「是否含媒体」的判定都带缓存，强制刷新时一并作废，
+    // 否则刚拷进来的影片要等缓存过期才会出现。
+    library.invalidate();
     final count = (await library.refreshAll()).length;
     await _sendJson(request, HttpStatus.ok, {
       'ok': true,

@@ -49,6 +49,7 @@ class ServerConfig {
     List<RootDir>? roots,
     this.enableDiscovery = true,
     this.discoveryPort = 45789,
+    this.hideEmptyDirs = true,
   }) : roots = roots ?? <RootDir>[];
 
   /// HTTP 监听端口。
@@ -75,6 +76,12 @@ class ServerConfig {
   /// UDP 发现端口。
   int discoveryPort;
 
+  /// 浏览目录时是否隐藏「子树里没有任何视频/音频」的目录。
+  ///
+  /// 默认开启：与影片混放在同一个根目录下的软件目录、资料目录不会出现在
+  /// 客户端列表里。想看到完整文件树时可关掉。
+  bool hideEmptyDirs;
+
   Map<String, Object?> toJson() => {
         'port': port,
         'serverName': serverName,
@@ -84,6 +91,7 @@ class ServerConfig {
         'roots': roots.map((r) => r.toJson()).toList(),
         'enableDiscovery': enableDiscovery,
         'discoveryPort': discoveryPort,
+        'hideEmptyDirs': hideEmptyDirs,
       };
 
   static ServerConfig fromJson(Map<String, Object?> json) {
@@ -106,6 +114,9 @@ class ServerConfig {
           ? json['enableDiscovery']! as bool
           : true,
       discoveryPort: _asInt(json['discoveryPort'], 45789),
+      hideEmptyDirs: json['hideEmptyDirs'] is bool
+          ? json['hideEmptyDirs']! as bool
+          : true,
     );
   }
 
