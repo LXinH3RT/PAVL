@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# libmpv / ANGLE 预编译包（由 scripts/setup_media_kit_deps.py 下载）
+/build/windows/x64/*.7z
