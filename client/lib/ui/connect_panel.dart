@@ -94,12 +94,10 @@ class _ConnectPanelState extends State<ConnectPanel> {
         Container(
           width: 48,
           height: 48,
-          decoration: BoxDecoration(
-            color: PavlColors.accent,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: const Icon(Icons.play_arrow_rounded,
-              color: Colors.white, size: 32),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
+          clipBehavior: Clip.antiAlias,
+          child: Image.asset('assets/branding/logo_mark.png',
+              fit: BoxFit.cover, filterQuality: FilterQuality.high),
         ),
         const SizedBox(width: 16),
         Column(

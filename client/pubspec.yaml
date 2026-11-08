@@ -41,6 +41,7 @@ flutter:
   # 需要粗体时由引擎合成，因此不按字重拆分成多个 asset。
   # 许可证与来源声明必须随包分发，见 assets/fonts/NOTICE.txt。
   assets:
+    - assets/branding/logo_mark.png
     - assets/fonts/MiSans-LICENSE.txt
     - assets/fonts/NOTICE.txt
 
