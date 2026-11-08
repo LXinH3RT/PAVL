@@ -107,10 +107,11 @@ PAVL 客户端
 ===========
 
 1. 双击 pavl_client.exe。
-2. 程序会自动在局域网里搜索 PAVL 服务端。
-   - 搜不到就点「手动连接」，输入服务端显示的那个地址。
+2. 启动时会自动在局域网里搜索 PAVL 服务端，找到的会直接列出来。
+   也可以自己在下面填地址与端口。
 3. 第一次连接需要输入 PIN，就是服务端托盘菜单里显示的那 6 位数字。
-4. 配对一次即可，之后会自动记住。
+   填好后点「连接」直接进入目录列表。
+4. 配对一次即可，之后打开就自动进上次的服务器。
 
 播放相关
 --------
@@ -123,15 +124,18 @@ PAVL 客户端
 
 放不出来怎么办
 --------------
-点开某部片后如果一直黑屏，点右上角齿轮，把日志路径复制出来，
-那份 client.log 里记着播放器每一步的时间点与报错原因。
+点开某部片后如果一直黑屏，界面上会给出原因与日志位置；
+也可以点右上角齿轮，在「排查」里复制日志路径。
 常见原因：显卡驱动或硬件解码初始化失败、服务端中途退出、
 防火墙拦住了端口。
 
 数据位置
 --------
-    %APPDATA%\\PAVL\\client.json    连接信息
-    %APPDATA%\\PAVL\\client.log     播放日志（播放过才会生成）
+配对信息、播放日志与临时文件都放在本程序同级的 PAVL-data 文件夹里，
+整个文件夹拷走就能带着配对状态与现场。删除该文件夹等于恢复出厂设置。
+
+    PAVL-data\\client.json    连接信息
+    PAVL-data\\client.log     播放日志（播放过才会生成）
 """
 
 ROOT_README = """\
@@ -199,7 +203,11 @@ def main() -> int:
     shutil.copy2(SERVER_EXE, server_dir / "pavl.exe")
     (server_dir / "README.txt").write_text(SERVER_README, encoding="utf-8")
 
+    # 排除本机运行时产生的数据：PAVL-data 里有配对令牌与日志，绝不能进发布包。
+    skip = {'PAVL-data'}
     for item in CLIENT_DIR.iterdir():
+        if item.name in skip or item.name.endswith('.log'):
+            continue
         dest = client_dir / item.name
         if item.is_dir():
             shutil.copytree(item, dest)
