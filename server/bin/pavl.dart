@@ -13,6 +13,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:pavl_server/auth.dart';
 import 'package:pavl_server/config.dart';
@@ -152,6 +153,10 @@ Future<void> main(List<String> args) async {
         TrayMenuItem(TrayCommand.copyPin, '复制 PIN'),
         TrayMenuItem(TrayCommand.openBrowser, '在浏览器中打开'),
         TrayMenuItem(TrayCommand.openDataDir, '打开数据目录'),
+        TrayMenuItem.separator(),
+        TrayMenuItem(TrayCommand.addRoot, '添加共享目录…'),
+        TrayMenuItem(TrayCommand.changeRoots, '更换共享目录…'),
+        TrayMenuItem.separator(),
         TrayMenuItem(TrayCommand.regeneratePin, '重新生成 PIN（旧设备需重新配对）'),
         TrayMenuItem.separator(),
         TrayMenuItem(TrayCommand.exit, '退出'),
@@ -230,6 +235,10 @@ Future<void> _handleTrayCommand(
       await _openUrl(home);
     case TrayCommand.openDataDir:
       await _openUrl(store.file.parent.path);
+    case TrayCommand.addRoot:
+      await _pickAndAddRoot(config, store, server);
+    case TrayCommand.changeRoots:
+      await _pickAndReplaceRoots(config, store, server);
     case TrayCommand.regeneratePin:
       config.pin = _generatePin();
       await store.save(config);
@@ -237,6 +246,97 @@ Future<void> _handleTrayCommand(
     case TrayCommand.exit:
       _shutdown?.call();
   }
+}
+
+/// 弹文件夹选择框。放到独立 isolate 里跑，免得服务器在用户挑目录时整个卡住。
+Future<String?> _pickFolderAsync(String title) async {
+  try {
+    return await Isolate.run(() => pickFolder(title: title));
+  } on Object {
+    // 起 isolate 失败就退回当前 isolate，至少功能还能用。
+    return pickFolder(title: title);
+  }
+}
+
+/// 弹提示框。同样不能占用主 isolate：MessageBoxW 会一直阻塞到用户点掉，
+/// 期间 HTTP 服务会因为事件循环被卡住而没有任何响应。
+Future<void> _showMessageAsync(
+  String text, {
+  String caption = 'PAVL',
+  bool isError = false,
+}) async {
+  try {
+    await Isolate.run(
+      () => showMessage(text, caption: caption, isError: isError),
+    );
+  } on Object {
+    // 提示框弹不出来不影响主流程。
+  }
+}
+
+/// 追加一个共享目录。
+Future<void> _pickAndAddRoot(
+  ServerConfig config,
+  ConfigStore store,
+  pavl.PavlServer server,
+) async {
+  final picked = await _pickFolderAsync('选择要共享的视频文件夹');
+  if (picked == null || picked.isEmpty) return;
+
+  if (config.roots.any((r) => _samePath(r.path, picked))) {
+    await _showMessageAsync('这个文件夹已经在共享列表里了。');
+    return;
+  }
+  config.roots.add(RootDir(path: picked));
+  await store.save(config);
+  await _afterRootsChanged(server);
+  await _showMessageAsync('已开始共享：\n$picked');
+}
+
+/// 把共享目录换成新选的一个（原有的全部移除）。
+Future<void> _pickAndReplaceRoots(
+  ServerConfig config,
+  ConfigStore store,
+  pavl.PavlServer server,
+) async {
+  final picked = await _pickFolderAsync('选择要共享的视频文件夹');
+  if (picked == null || picked.isEmpty) return;
+
+  if (config.roots.length == 1 && _samePath(config.roots.first.path, picked)) {
+    await _showMessageAsync('共享目录没有变化。');
+    return;
+  }
+  config.roots
+    ..clear()
+    ..add(RootDir(path: picked));
+  await store.save(config);
+  await _afterRootsChanged(server);
+  await _showMessageAsync(
+    '共享目录已改为：\n$picked\n\n'
+    '原来的目录不再对外提供，已配对的设备需要重新浏览。',
+  );
+}
+
+/// 目录列表变了：清缓存并后台重扫，不用重启服务端。
+Future<void> _afterRootsChanged(pavl.PavlServer server) async {
+  server.library.invalidate();
+  try {
+    await server.library.refreshAll();
+  } on Object catch (error) {
+    stderr.writeln('重新扫描媒体库失败: $error');
+  }
+}
+
+bool _samePath(String a, String b) {
+  String norm(String value) {
+    var out = value.replaceAll('\\', '/');
+    while (out.endsWith('/')) {
+      out = out.substring(0, out.length - 1);
+    }
+    return out.toLowerCase();
+  }
+
+  return norm(a) == norm(b);
 }
 
 /// 写系统剪贴板。

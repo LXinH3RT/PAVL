@@ -506,15 +506,17 @@ class PavlServer {
     response.headers.set('Content-Type', contentTypeOf(abs));
     response.headers.set('Cache-Control', 'no-cache');
 
+    final rangeHeader = request.headers.value('range');
+
     // 客户端缓存命中：直接 304，省一次全量传输。
+    // 带 Range 的请求必须走 206，否则播放器 seek 时拿到 304 会当成空响应。
     final ifNoneMatch = request.headers.value('if-none-match');
-    if (ifNoneMatch != null && ifNoneMatch == etag) {
+    if (rangeHeader == null && ifNoneMatch != null && ifNoneMatch == etag) {
       response.statusCode = HttpStatus.notModified;
       await response.close();
       return;
     }
 
-    final rangeHeader = request.headers.value('range');
     final result = parseRange(rangeHeader, size);
 
     if (rangeHeader != null && !result.isOk) {

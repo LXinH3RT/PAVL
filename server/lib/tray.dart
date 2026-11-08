@@ -26,6 +26,8 @@ abstract final class TrayCommand {
   static const int openDataDir = 1002;
   static const int regeneratePin = 1003;
   static const int openBrowser = 1004;
+  static const int addRoot = 1005;
+  static const int changeRoots = 1006;
   static const int exit = 1099;
 }
 
