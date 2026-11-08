@@ -154,7 +154,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("action", choices=["shot", "click", "key", "type", "rect", "focus"])
     ap.add_argument("args", nargs="*")
-    ap.add_argument("--out", default=r"D:\workspace\tmp\pavl-shot.png")
+    ap.add_argument("--out", default="shot.png")
     ap.add_argument(
         "--screen",
         action="store_true",
