@@ -22,6 +22,8 @@ import 'package:pavl_server/pavl_server.dart' as pavl;
 import 'package:pavl_server/tray.dart';
 
 Future<void> main(List<String> args) async {
+  // 托盘图标要按物理像素挑帧，所以进程启动时就声明 DPI 感知。
+  enableDpiAwareness();
   final options = _parseArgs(args);
   if (options == null) {
     _printUsage();

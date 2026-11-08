@@ -12,9 +12,13 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
+
+import 'tray_icon.dart';
 
 // ---------------------------------------------------------------------------
 // 公开 API（主 isolate）
@@ -250,6 +254,9 @@ const int _tpmReturnCmd = 0x0100;
 
 const int _idiApplication = 32512;
 const int _wsPopup = 0x80000000;
+const int _iconResourceVersion = 0x00030000;
+const int _smCxSmIcon = 49;
+const int _defaultIconSize = 16;
 
 void _trayIsolateMain(List<Object> args) {
   final reply = args[0] as SendPort;
@@ -259,7 +266,7 @@ void _trayIsolateMain(List<Object> args) {
   final instance = _getModuleHandle(nullptr);
   final className = _toWide('PavlTrayWnd');
   final windowName = _toWide('PAVL');
-  final icon = _loadIcon(0, Pointer<Uint16>.fromAddress(_idiApplication));
+  final icon = _loadBrandIcon();
 
   final wndProc = NativeCallable<_WndProcNative>.isolateLocal(
     (int hwnd, int message, int wParam, int lParam) =>
@@ -683,6 +690,14 @@ final _loadIcon = _user32.lookupFunction<
     IntPtr Function(IntPtr, Pointer<Uint16>),
     int Function(int, Pointer<Uint16>)>('LoadIconW');
 
+final _createIconFromResourceEx = _user32.lookupFunction<
+    IntPtr Function(Pointer<Uint8>, Uint32, Int32, Uint32, Int32, Int32, Uint32),
+    int Function(Pointer<Uint8>, int, int, int, int, int, int)>(
+        'CreateIconFromResourceEx');
+
+final _getSystemMetrics = _user32.lookupFunction<Int32 Function(Int32), int Function(int)>(
+    'GetSystemMetrics');
+
 final _shellNotifyIcon = _shell32.lookupFunction<
     Int32 Function(Uint32, Pointer<_NotifyIconData>),
     int Function(int, Pointer<_NotifyIconData>)>('Shell_NotifyIconW');
@@ -722,3 +737,124 @@ void _copyWide(Array<Uint16> target, int capacity, Pointer<Uint16> source) {
   }
   target[i] = 0;
 }
+
+/// 让进程成为 DPI 感知的，否则 `SM_CXSMICON` 只给逻辑像素（高分屏上恒为
+/// 16），托盘图标就会被系统从 16 拉大，糊成一片。进程级设置只需要成功一次，
+/// 之后所有 Win32 度量都返回物理像素。
+///
+/// 按可用性依次尝试三个 API：Per-Monitor V2（Win10 1703+）→ Per-Monitor
+/// （Win8.1+）→ System DPI Aware（Vista+）。
+void enableDpiAwareness() {
+  if (!Platform.isWindows) return;
+  try {
+    final setContext = _user32.lookupFunction<Int32 Function(IntPtr), int Function(int)>(
+        'SetProcessDpiAwarenessContext');
+    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+    if (setContext(-4) != 0) return;
+  } on Object {
+    // 函数不存在，继续往下试。
+  }
+  try {
+    final shcore = DynamicLibrary.open('shcore.dll');
+    final setAwareness = shcore.lookupFunction<Int32 Function(Int32), int Function(int)>(
+        'SetProcessDpiAwareness');
+    if (setAwareness(2) >= 0) return; // 2 = PROCESS_PER_MONITOR_DPI_AWARE
+  } on Object {
+    // 同上。
+  }
+  try {
+    final setAware = _user32.lookupFunction<Int32 Function(), int Function()>(
+        'SetProcessDPIAware');
+    setAware();
+  } on Object {
+    // 全部失败时按 100% 缩放处理，图标只是偏小，不影响功能。
+  }
+}
+
+/// 通知区域图标的目标像素边长。
+///
+/// 调用 `enableDpiAwareness()` 之后 `SM_CXSMICON` 返回的就是物理像素，可直接
+/// 用作 `CreateIconFromResourceEx` 的目标尺寸；取不到时退回 16。
+int _systemIconSize() {
+  final size = _getSystemMetrics(_smCxSmIcon);
+  return size >= 16 && size <= 256 ? size : _defaultIconSize;
+}
+
+/// 从内嵌的 ICO 里按目标尺寸挑一帧，返回 (偏移, 长度)；无法解析时返回 null。
+(int, int)? _pickIconFrame(Uint8List bytes, int desired) {
+  if (bytes.length < 6) return null;
+  final view = ByteData.sublistView(bytes);
+  if (view.getUint16(0, Endian.little) != 0) return null;
+  if (view.getUint16(2, Endian.little) != 1) return null; // 1 表示图标
+  final count = view.getUint16(4, Endian.little);
+  if (count == 0 || 6 + count * 16 > bytes.length) return null;
+
+  (int, int)? best;
+  var bestWidth = 0;
+  (int, int)? largest;
+  var largestWidth = 0;
+  for (var i = 0; i < count; i++) {
+    final base = 6 + i * 16;
+    final width = bytes[base] == 0 ? 256 : bytes[base];
+    final length = view.getUint32(base + 8, Endian.little);
+    final offset = view.getUint32(base + 12, Endian.little);
+    if (length == 0 || offset + length > bytes.length) continue;
+    if (width > largestWidth) {
+      largestWidth = width;
+      largest = (offset, length);
+    }
+    if (width >= desired && (best == null || width < bestWidth)) {
+      bestWidth = width;
+      best = (offset, length);
+    }
+  }
+  return best ?? largest;
+}
+
+/// 用内嵌图标构造托盘图标句柄。
+///
+/// `CreateIconFromResourceEx` 只认单个图标资源（DIB 或 PNG 数据），不能直接
+/// 喂整个 .ico 文件，所以先自己解析 .ico 目录挑出目标尺寸那一帧。图标数据
+/// 会被复制进句柄，函数返回后可以释放缓冲区。句柄随进程存活，不销毁。
+int _loadBrandIcon() {
+  final fallback = _loadIcon(0, Pointer<Uint16>.fromAddress(_idiApplication));
+  final Uint8List bytes;
+  try {
+    bytes = base64Decode(trayIconIcoBase64);
+  } catch (error) {
+    trayLog('brand icon: base64 decode failed: $error');
+    return fallback;
+  }
+  final size = _systemIconSize();
+  final frame = _pickIconFrame(bytes, size);
+  if (frame == null) {
+    trayLog('brand icon: no usable frame for ${size}px (${bytes.length} bytes)');
+    return fallback;
+  }
+
+  final (offset, length) = frame;
+  final buffer = _alloc<Uint8>(length);
+  if (buffer == nullptr) return fallback;
+  try {
+    buffer.asTypedList(length).setRange(0, length, bytes, offset);
+    final icon = _createIconFromResourceEx(
+      buffer,
+      length,
+      1, // fIcon
+      _iconResourceVersion,
+      size,
+      size,
+      0,
+    );
+    if (icon == 0) {
+      trayLog('brand icon: CreateIconFromResourceEx failed for ${size}px '
+          '(${length} bytes)');
+      return fallback;
+    }
+    trayLog('brand icon: loaded ${size}px frame (${length} bytes)');
+    return icon;
+  } finally {
+    _free(buffer.cast());
+  }
+}
+
