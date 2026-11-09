@@ -381,11 +381,16 @@ class PavlClient {
       _getJson('/api/v1/info', auth: false);
 
   /// 用 PIN 换一个长期令牌。
+  ///
+  /// [platform] 必填而不是给默认值：客户端要同时跑在 Windows 与 macOS 上，
+  /// 留一个 `'windows'` 的默认值，漏传时服务端设备列表里就会把 Mac 显示成
+  /// Windows，而且这种错误不会报错，只能靠人看。调用方一律传
+  /// `platformTag`（见 `util/platform_support.dart`）。
   Future<String> pair({
     required String pin,
     required String deviceId,
     required String deviceName,
-    String platform = 'windows',
+    required String platform,
   }) async {
     final json = await _postJson('/api/v1/pair', {
       'pin': pin,
@@ -471,6 +476,18 @@ class PavlClient {
       for (final item in items)
         if (item is Map<String, Object?>) item,
     ];
+  }
+
+  /// 让服务端丢掉目录缓存并重新扫描，返回扫到的视频总数。
+  ///
+  /// 服务端有两层缓存：目录项列表，以及「这棵子树里到底有没有媒体」的探测
+  /// 结果（五分钟）。后者决定空目录要不要出现在列表里，所以刚加进共享列表
+  /// 的文件夹，或者刚往里拷了影片的目录，都要等缓存过期才会冒出来。只重新
+  /// 拉一次列表解决不了这个问题——那只是把同一份缓存的结论再读一遍，必须
+  /// 显式让服务端作废缓存。
+  Future<int> refresh() async {
+    final json = await _postJson('/api/v1/refresh', const {});
+    return (json['count'] as num?)?.toInt() ?? 0;
   }
 
   void close() => _http.close(force: true);

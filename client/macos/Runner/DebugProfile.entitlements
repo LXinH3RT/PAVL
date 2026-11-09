@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 与 Release 一致不开应用沙盒，调试期与发布期的数据目录、网络行为因此相同。 -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<!-- Dart 的 JIT 需要可写可执行内存，调试构建必须带上这一条。 -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

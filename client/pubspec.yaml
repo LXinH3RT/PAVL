@@ -1,7 +1,7 @@
 name: pavl_client
 description: "PAVL — Play All Videos in Lan，局域网跨设备视频播放器客户端"
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ^3.6.2
@@ -19,7 +19,8 @@ dependencies:
   # 窗口管理：普通窗口 / 全屏 / 最小尺寸约束，播放页要切全屏。
   window_manager: ^0.4.3
 
-  # 屏幕常亮：播放时阻止系统休眠。
+  # 屏幕常亮：播放期间阻止系统休眠与熄屏，暂停或退出即释放。
+  # 接入点在 lib/player/playback_controller.dart，跟着 player.stream.playing 走。
   wakelock_plus: ^1.2.8
 
   # 字体：MiSans（可变字体），随包分发，不依赖系统字体。
@@ -27,6 +28,9 @@ dependencies:
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  # 端到端验证：在真实应用进程里跑，能真正拉起 libmpv 与网络。
+  integration_test:
     sdk: flutter
   flutter_lints: ^5.0.0
 

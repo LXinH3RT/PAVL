@@ -39,12 +39,12 @@ Which formats play is a property of the client, not of the server.
 | **Pairing** | One-time 6-digit PIN, exchanged for a 32-byte token; later connections are automatic. Paired devices can be reviewed and revoked from the server |
 | **Browsing** | Drill down folder by folder with item counts and file sizes; breadcrumbs jump back to any level; folders with no media are hidden |
 | **Sorting** | Name / natural order (`Episode 2` before `Episode 10`) / size / modified time |
-| **Playback** | Play-pause, ±10 s, scrubbing, 0.5x–2.0x speed, volume, fullscreen |
+| **Playback** | Play-pause, ±10 s, scrubbing, 0.5x–2.0x speed, volume, fullscreen; the display is kept awake while playing and released on pause or exit |
 | **Track selection** | Audio and subtitle tracks listed separately; the choice is remembered per file and restored on reopen |
 | **Subtitles** | Embedded tracks plus sidecar files in the same folder, matched by base name and episode number first and by similarity as a fallback; ASS styling renders as authored |
 | **Progress** | Two modes: this device only, or synced across devices so you can continue on another machine; the list shows progress and percentage |
 | **Resume** | Reopening a file offers the previous position: start over or continue |
-| **Portable** | Client data, logs and temporary files live in a `PAVL-data/` folder next to the executable; copy the folder and you are done |
+| **Portable** | On Windows the client keeps its data, logs and temporary files in a `PAVL-data/` folder next to the executable, so copying the folder is enough; on macOS it follows the platform convention and uses `~/Library/Application Support/PAVL` |
 | **Tray** | The server lives in the notification area; right-click to add or change shared folders and to read the address and PIN. Changes take effect immediately without a restart |
 | **Diagnostics** | Playback failures report a reason and the log location; sensitive fields such as tokens are redacted |
 
@@ -77,6 +77,14 @@ Which formats play is a property of the client, not of the server.
 
 Keyboard controls while playing: `Space` play/pause, `←` `→` seek back/forward 10 seconds,
 `↑` `↓` volume ±5, `F` fullscreen, `Esc` leave fullscreen (or go back when not fullscreen).
+
+**Client** (macOS)
+
+1. Drag `PAVL.app` into the Applications folder and open it.
+2. The first launch asks whether PAVL may find and connect to devices on your local network.
+   **This must be allowed.** Otherwise discovery finds nothing and streaming is blocked. If it was
+   denied, re-enable it under System Settings → Privacy & Security → Local Network.
+3. After that it behaves exactly like the Windows client.
 
 ## How it works
 
@@ -123,13 +131,15 @@ PAVL/
 │     ├─ tray.dart             Tray icon and menu
 │     ├─ tray_icon.dart        Embedded tray icon asset
 │     └─ pavl_server.dart      Routing and authentication
-├─ client/                     Flutter client (Windows)
+├─ client/                     Flutter client (Windows / macOS)
 │  ├─ lib/api/                 HTTP client and LAN discovery
-│  ├─ lib/store/               Local settings and portable data directory
+│  ├─ lib/store/               Local settings and data directory
 │  ├─ lib/player/              Playback controller wrapper
 │  ├─ lib/ui/                  Connect, browse, player, settings, pairing
-│  ├─ lib/util/                Logging and natural ordering
-│  └─ assets/fonts/            UI font and its license
+│  ├─ lib/util/                Logging, natural ordering, platform differences
+│  ├─ assets/fonts/            UI font and its license
+│  ├─ windows/                 Windows platform project
+│  └─ macos/                   macOS platform project
 ├─ scripts/                    Build, packaging and UI verification scripts
 └─ docs/images/                Documentation screenshots
 ```
@@ -157,14 +167,32 @@ flutter build windows --release
 expected location, so that the CMake build does not have to fetch them itself. Behind a proxy or on a
 slow connection this step is what prevents the build from failing with an integrity error.
 
+**Client** (macOS, run on the Mac)
+
+```
+cd client
+flutter pub get
+flutter build macos --release
+```
+
+On macOS the libmpv frameworks are fetched by `media_kit_libs_macos_video` during `pod install`, so no
+extra script is needed. Recent Xcode releases only accept deployment targets of 12.0 or later (27.2
+supports 12.0 through 27.2.x) while the dependency podspecs still declare 10.9, so the `post_install`
+hook in `macos/Podfile` raises every pod to 12.0. Do not remove it: without it each `pod install`
+writes the old values back and the build fails.
+
 **Packaging**
 
 ```
-python scripts/package.py --zip
+python scripts/package.py --zip           # Windows: server + client
+python scripts/package.py --macos --zip   # macOS: the client app only
 ```
 
-The result lands in `dist/PAVL-<version>/`: `server/` and `client/` each carry a short readme, and the
-root has an overview. `--zip` also produces an archive.
+The Windows build lands in `dist/PAVL-<version>/`: `server/` and `client/` each carry a short readme,
+and the root has an overview. The macOS build lands in `dist/PAVL-<version>-macos/` and contains only
+`PAVL.app` plus installation notes — there is no macOS server. The `.app` archive has to be produced by
+`ditto` on macOS; a plain zip loses the symlinks and executable bits and will not launch after
+extraction.
 
 ## Conventions
 
@@ -182,7 +210,9 @@ root has an overview. `--zip` also produces an archive.
 |-|-|
 | Windows server | ✅ Complete |
 | Windows client | ✅ Complete |
-| macOS / Android / iOS / Android TV | Not started |
+| macOS client | ✅ Complete |
+| Linux server | Builds; tray and native dialogs missing |
+| Android / iOS / Android TV | Not started |
 | Apple TV | Out of scope |
 
 The protocol and routes do not depend on Windows; porting the server mainly means replacing the tray
@@ -190,8 +220,11 @@ icon and the native dialogs.
 
 ## Known limitations
 
-* The client ships for Windows only; on other platforms the server has no tray menu.
+* The server ships for Windows only; on other platforms it builds and runs but has no tray menu.
 * The firewall port must be allowed manually; there is no self-check yet.
+* The macOS client needs the Local Network permission on first launch. After a denial the system stops
+  asking; if a manual broadcast then finds no server, the client points the user to
+  System Settings → Privacy & Security → Local Network.
 * Poster and synopsis support is exposed by the API but not surfaced in the UI.
 * The aggregated library view (recently played, filter by kind) is served by the API but not yet used
   by the client.

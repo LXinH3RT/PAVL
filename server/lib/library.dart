@@ -302,11 +302,13 @@ class Library {
       final probes = await _probeDirs(roots);
       final list = <BrowseEntry>[];
       for (var i = 0; i < roots.length; i++) {
-        // 根目录同样遵守「没有视频就不显示」的规则；全部为空时至少保留一条，
-        // 否则客户端会看到一片空白，连出了什么问题都不知道。
-        if (config.hideEmptyDirs && !probes[i].hasMedia && roots.length > 1) {
-          continue;
-        }
+        // 根目录是用户显式配置的共享目录，一律显示。
+        //
+        // 「没有视频就不显示」这条规则是为子目录准备的——影片目录旁边常
+        // 混着软件安装目录、缓存目录，藏起来清爽。套到根目录上就会出问题：
+        // 刚添加的共享目录里还没有索引到影片、或者探测结果恰好缓存成了
+        // 「无媒体」，整个目录就会从列表里消失，用户会以为配置没生效。
+        // 空根目录显示成「0 项」是如实反馈，比凭空少一行好。
         list.add(BrowseEntry(
           name: roots[i].name,
           relativePath: roots[i].relativePath,

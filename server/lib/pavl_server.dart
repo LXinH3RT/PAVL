@@ -18,7 +18,7 @@ import 'subtitle_match.dart';
 import 'streaming.dart';
 
 /// 服务端版本，出现在 /api/v1/info 与发现应答里。
-const String pavlVersion = '0.1.0';
+const String pavlVersion = '0.2.0';
 
 /// API 版本，客户端据此判断兼容性。
 const int apiVersion = 1;

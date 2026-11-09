@@ -22,29 +22,47 @@ Directory? _resolvedDataDir;
 /// 优先用可执行文件同级的 `PAVL-data/`：便携版整包复制后配对状态、播放进度
 /// 偏好、日志都跟着走，也不会因为用户配置目录不可写而失败。该目录建不出来
 /// （装到只读位置、exe 放在 Program Files 下但没有权限）时，退回系统配置目录。
+///
+/// macOS 例外：`.app` 是被代码签名封存的目录，往里写会破坏签名，而且用户通常
+/// 把应用放在 `/Applications`（普通用户无写权限）。因此 macOS 直接用标准的
+/// `~/Library/Application Support/PAVL`。
+///
+/// 环境变量 `PAVL_DATA_DIR` 可覆盖以上全部规则，用于并行跑多个测试实例时
+/// 隔离各自的数据目录。
 Directory appDataDir() {
   final cached = _resolvedDataDir;
   if (cached != null) return cached;
 
-  final portable = Directory(
-    '${File(Platform.resolvedExecutable).parent.path}'
-    '${Platform.pathSeparator}$portableDirName',
-  );
-  if (_ensureWritable(portable)) {
-    _resolvedDataDir = portable;
-    return portable;
+  final override = Platform.environment['PAVL_DATA_DIR'];
+  if (override != null && override.isNotEmpty) {
+    final dir = Directory(override);
+    if (_ensureWritable(dir)) {
+      _resolvedDataDir = dir;
+      return dir;
+    }
+  }
+
+  if (!Platform.isMacOS) {
+    final portable = Directory(
+      '${File(Platform.resolvedExecutable).parent.path}'
+      '${Platform.pathSeparator}$portableDirName',
+    );
+    if (_ensureWritable(portable)) {
+      _resolvedDataDir = portable;
+      return portable;
+    }
   }
 
   final legacy = legacyDataDir();
   try {
     legacy.createSync(recursive: true);
+    _resolvedDataDir = legacy;
+    return legacy;
   } catch (_) {
     // 连系统配置目录都建不出来时只能退回临时目录，至少不让启动崩掉。
     _resolvedDataDir = Directory.systemTemp;
     return _resolvedDataDir!;
   }
-  _resolvedDataDir = legacy;
-  return legacy;
 }
 
 /// 旧版本的配置目录（%APPDATA%\PAVL 等）。

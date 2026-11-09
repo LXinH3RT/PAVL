@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 不开应用沙盒：本程序自签名分发、不进 App Store，且需要把配置与日志
+	     放在 ~/Library/Application Support/PAVL 这个固定位置，便于用户自行
+	     查看与打包迁移。开启沙盒会把它重定向到 ~/Library/Containers/... 下，
+	     路径随 bundle id 变化，反而不利于排查。 -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+</dict>
+</plist>

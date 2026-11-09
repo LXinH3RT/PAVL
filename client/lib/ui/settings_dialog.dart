@@ -13,6 +13,7 @@ import '../api/pavl_client.dart';
 import '../app.dart';
 import '../store/app_store.dart';
 import '../util/app_log.dart';
+import '../util/platform_support.dart';
 
 class SettingsDialog extends StatefulWidget {
   const SettingsDialog({
@@ -46,38 +47,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
     }
   }
 
-  /// 在资源管理器里打开日志文件所在的目录。
+  /// 在系统文件管理器里打开日志文件所在的目录。
   ///
-  /// 目录可能还不存在（从没播放过），先建出来。explorer 不接受 `file:` URI，
-  /// 必须给 Windows 原生路径。某些机器上 explorer 本身起不来（退出码
-  /// 0xC0000142，环境块异常），所以这里等一小会儿看它是不是直接死掉，死了就
-  /// 退回「把路径复制到剪贴板」，而不是弹一个用户看不懂的系统错误框。
+  /// 目录可能还不存在（从没播放过），先建出来。各平台用什么命令、成功与否
+  /// 怎么判断，都收在 [openDirectoryInFileManager] 里。打不开时退回「把路径
+  /// 复制到剪贴板」，而不是弹一个用户看不懂的系统错误框。
   Future<void> _openLogFolder() async {
     final dir = logFile().parent;
     try {
       await dir.create(recursive: true);
     } catch (_) {
-      // 目录建不出来时仍然试一下打开，explorer 自己会报错。
+      // 目录建不出来时仍然试一下打开，由打开命令自己报错。
     }
 
-    var opened = false;
-    try {
-      final process = await Process.start('explorer.exe', [dir.path]);
-      final code = await process.exitCode
-          .timeout(const Duration(seconds: 2), onTimeout: () => 0);
-      // explorer 打开成功时的退出码是 0 或 1；0xC0000142 之类说明它没起来。
-      opened = code == 0 || code == 1;
-      if (!opened) logLine('ui', '打开日志目录失败，explorer 退出码 $code');
-    } catch (error) {
-      logLine('ui', '打开日志目录异常：$error');
-    }
+    final opened = await openDirectoryInFileManager(dir.path);
+    if (!opened) logLine('ui', '打开日志目录失败：${dir.path}');
 
     if (opened || !mounted) return;
     await Clipboard.setData(ClipboardData(text: dir.path));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('系统打不开资源管理器，路径已复制：${dir.path}'),
+        content: Text('系统打不开文件管理器，路径已复制：${dir.path}'),
         duration: const Duration(seconds: 6),
       ),
     );

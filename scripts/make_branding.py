@@ -7,6 +7,8 @@
 
     client/assets/branding/logo_mark.png        界面用品牌标记（仅三角，512）
     client/windows/runner/resources/app_icon.ico Windows 应用与窗口图标（7 档）
+    client/macos/Runner/Assets.xcassets/AppIcon.appiconset/*.png
+                                                macOS 应用图标（16~1024，10 档）
     server/lib/tray_icon.dart                   托盘图标（内嵌 base64 的 ico）
 
 图标分档策略：48px 及以上用完整字标，32px 及以下只用三角标记——同样尺寸
@@ -30,6 +32,22 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+
+def _force_utf8_stdout() -> None:
+    """Windows 控制台默认用 GBK，直接打印中文会变成乱码。
+
+    与 `setup_media_kit_deps.py` 里的同名函数一致：切到 UTF-8，
+    errors="replace" 保证不会因为某个符号编码失败而中断生成。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass  # 已被重定向到不支持 reconfigure 的对象，保持原样
+
+
+_force_utf8_stdout()
+
 ROOT = Path(__file__).resolve().parent.parent
 MASTER = ROOT / "docs" / "images" / "logo.png"
 MARK_PNG = ROOT / "client" / "assets" / "branding" / "logo_mark.png"
@@ -45,6 +63,21 @@ TRIANGLE_RATIO = (957 / 1089)  # 宽 / 高
 APP_SIZES = (16, 24, 32, 48, 64, 128, 256)
 TRAY_SIZES = (16, 20, 24, 32, 40, 48, 64)
 MARK_ONLY_MAX = 32  # 该尺寸及以下只用三角标记
+
+# macOS 应用图标：Assets.xcassets 里按点阵尺寸各存一份，文件名沿用
+# flutter create 生成的 app_icon_<px>.png，Contents.json 不必改。
+MACOS_APPICON_DIR = (
+    ROOT / "client" / "macos" / "Runner" / "Assets.xcassets" / "AppIcon.appiconset"
+)
+MACOS_SIZES = (16, 32, 64, 128, 256, 512, 1024)
+
+# macOS 上纯标记的阈值比 Windows 更高：内容按 824/1024 收缩后，64px 里的
+# 字标只剩不到 10px 高，挤在一起反而比单一个三角更糊。128 起再带字标。
+MACOS_MARK_ONLY_MAX = 64
+
+# Apple 的图标规范要求内容占 1024 画布的 824×824，四周留透明边距；直接铺满
+# 会和 Dock 里其它应用视觉大小不一致（显得偏大）。
+MACOS_CONTENT_RATIO = 824 / 1024
 
 SS = 8  # 超采样倍数，先画大图再 LANCZOS 缩小，边缘才不会锯齿
 
@@ -80,6 +113,30 @@ def _full_logo(size: int) -> Image.Image:
 def _mark_png_bytes(size: int) -> bytes:
     buf = io.BytesIO()
     _draw_mark(size).save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def _macos_icon(size: int) -> Image.Image:
+    """macOS 应用图标：内容按 824/1024 收缩后居中，四周留透明边距。
+
+    macOS 不像 Windows 那样要求图标铺满画布——Dock 与 Finder 不做裁切，
+    内容顶满会显得比系统应用明显偏大。圆角沿用主图自带的样式（这里不打
+    蒙版，也不用 Apple 的连续曲率遮罩：自签名分发不经 App Store 审核，
+    与主图保持同一形状更一致）。
+
+    小尺寸沿用 ico 的策略，只用三角标记——16/32 像素下字标会糊成一团。
+    """
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    inner = max(1, round(size * MACOS_CONTENT_RATIO))
+    base = _draw_mark(inner) if size <= MACOS_MARK_ONLY_MAX else _full_logo(inner)
+    offset = (size - inner) // 2
+    canvas.paste(base, (offset, offset), base)
+    return canvas
+
+
+def _macos_png_bytes(size: int) -> bytes:
+    buf = io.BytesIO()
+    _macos_icon(size).save(buf, format="PNG", optimize=True)
     return buf.getvalue()
 
 
@@ -209,6 +266,10 @@ def main() -> int:
         (APP_ICON, app_ico),
         (TRAY_DART, tray_dart.encode("utf-8")),
     ]
+    # macOS 的 AppIcon.appiconset 每个点阵尺寸各一个文件；文件名沿用
+    # flutter create 生成的 app_icon_<px>.png，Contents.json 无需改动。
+    for px in MACOS_SIZES:
+        outputs.append((MACOS_APPICON_DIR / f"app_icon_{px}.png", _macos_png_bytes(px)))
 
     stale = []
     for path, data in outputs:

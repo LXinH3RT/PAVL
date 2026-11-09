@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 import '../api/discovery.dart';
 import '../api/pavl_client.dart';
 import '../store/app_store.dart';
+import '../util/app_log.dart';
 import 'browse_screen.dart';
 import 'connect_panel.dart';
 
@@ -72,6 +73,11 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _found.add(server));
     });
     if (!mounted) return;
+
+    // 发现结果落盘：macOS 上本地网络权限被拒时广播包发得出去、一台都收不到，
+    // 从界面上看不出与「局域网里确实没有服务器」的区别，只能靠日志复盘。
+    logLine('net', '广播发现结束，收到 ${results.length} 台'
+        '${results.isEmpty ? '' : '：${results.map((e) => '${e.name}@${e.host}:${e.port}').join(', ')}'}');
 
     // 只发现一台且已经配对过，就不必让用户再点一次。
     if (results.length == 1 && widget.store.serverById(results.first.serverId)?.hasToken == true) {

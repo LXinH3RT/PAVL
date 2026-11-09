@@ -5,15 +5,24 @@
     python scripts/package.py                 # 生成 dist/PAVL-<版本>/
     python scripts/package.py --zip           # 同时压成 zip
     python scripts/package.py --out D:/x      # 换输出目录
+    python scripts/package.py --macos --zip   # 生成 macOS 客户端包
 
-产物布局：
+产物布局（Windows）：
 
-    PAVL-0.1.0/
+    PAVL-<版本>/
       server/pavl.exe              服务端，双击即用
       server/README.txt            首次运行说明
       client/pavl_client.exe       客户端
       client/*.dll, data/          客户端运行时
       README.txt                   总说明
+
+产物布局（macOS）：
+
+    PAVL-<版本>-macos/
+      PAVL.app                     客户端，拖进「应用程序」即可
+      README.txt                   安装与权限说明
+
+服务端只有 Windows 版本，macOS 包里不带服务端。
 """
 
 from __future__ import annotations
@@ -25,10 +34,29 @@ import sys
 import zipfile
 from pathlib import Path
 
+
+def _force_utf8_stdout() -> None:
+    """Windows 控制台默认用 GBK，直接打印中文会变成乱码。
+
+    与 `setup_media_kit_deps.py` 里的同名函数一致：切到 UTF-8，
+    errors="replace" 保证不会因为某个符号编码失败而中断打包。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass  # 已被重定向到不支持 reconfigure 的对象，保持原样
+
+
+_force_utf8_stdout()
+
 ROOT = Path(__file__).resolve().parent.parent
 SERVER_EXE = ROOT / "build" / "pavl.exe"
 CLIENT_DIR = ROOT / "client" / "build" / "windows" / "x64" / "runner" / "Release"
-VERSION = "0.1.0"
+MACOS_APP = (
+    ROOT / "client" / "build" / "macos" / "Build" / "Products" / "Release" / "PAVL.app"
+)
+VERSION = "0.2.0"
 
 SERVER_README = """\
 PAVL 服务端
@@ -177,24 +205,112 @@ PAVL — Play All Videos in Lan
 MiSans-LICENSE.txt 与 NOTICE.txt。
 """
 
+MACOS_README = """\
+PAVL macOS 客户端
+=================
+
+安装
+----
+把 PAVL.app 拖进「应用程序」文件夹，然后双击运行。
+
+第一次启动时系统可能弹两个提示，都要允许：
+
+1. 「PAVL 想要查找并连接到本地网络上的设备」
+   —— 用于广播发现同一网络里的服务端，以及从服务端拉流。
+   点「不允许」会连不上，之后需要到
+   「系统设置 → 隐私与安全性 → 本地网络」里重新打开。
+
+2. 「PAVL 是从互联网下载的应用，确定要打开吗」
+   —— 点「打开」。这个包没有经过 Apple 公证，
+   如果提示「已损坏」或「无法验证开发者」，在
+   「系统设置 → 隐私与安全性」页面底部点「仍要打开」，
+   或者在终端里执行：
+
+       xattr -dr com.apple.quarantine /Applications/PAVL.app
+
+使用
+----
+启动后会自动在局域网里搜索服务端，找到的直接列出来；
+也可以手动填地址与端口。第一次连接需要输入服务端的 6 位 PIN。
+
+键盘：空格播放/暂停，左右键 ±10 秒，上下键 ±5 音量，F 全屏，Esc 返回。
+
+数据位置
+--------
+    ~/Library/Application Support/PAVL/client.json    连接信息
+    ~/Library/Application Support/PAVL/client.log     播放日志
+
+删除这个文件夹等于恢复出厂设置。设置页里的「打开日志目录」会直接定位到那里。
+
+服务端
+------
+PAVL 服务端只提供 Windows 版本，需要在 Windows 或 Linux 机器上运行，
+macOS 客户端通过局域网连接它。
+"""
+
 
 def _require(path: Path, what: str) -> None:
     if not path.exists():
         sys.exit(f"缺少{what}：{path}\n请先构建。")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="打包 PAVL 分发目录")
-    parser.add_argument("--out", default=str(ROOT / "dist"), help="输出根目录")
-    parser.add_argument("--zip", action="store_true", help="额外生成 zip")
-    parser.add_argument("--name", default=f"PAVL-{VERSION}", help="目录名")
-    args = parser.parse_args()
+def _zip_dir(out_root: Path, target: Path) -> Path:
+    """把目录压成 zip，返回压缩包路径。"""
+    archive = out_root / f"{target.name}.zip"
+    if archive.exists():
+        archive.unlink()
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for path in sorted(target.rglob("*")):
+            if path.is_file():
+                zf.write(path, path.relative_to(out_root))
+    print(f"压缩包  : {archive}  ({archive.stat().st_size / 1024 / 1024:.1f} MB)")
+    return archive
 
+
+def _zip_app_bundle(out_root: Path, folder: Path, name: str) -> Path:
+    """把装着 .app 的目录压成 zip。
+
+    macOS 应用包里带符号链接与可执行权限，用 Python 的 zipfile 打包会丢掉
+    这两样，解压出来的程序直接起不来。macOS 上必须用 ditto（苹果自带，
+    专为整包拷贝设计）；其它系统上只能退化成普通 zip，仅用于查看包内容。
+    """
+    archive = out_root / f"{name}.zip"
+    if archive.exists():
+        archive.unlink()
+    if sys.platform == "darwin" and shutil.which("ditto"):
+        subprocess.run(
+            [
+                "ditto",
+                "-c",
+                "-k",
+                "--sequesterRsrc",
+                "--keepParent",
+                str(folder),
+                str(archive),
+            ],
+            check=True,
+        )
+    else:
+        print("提示: 非 macOS 环境，改用普通 zip；产物仅供查看，不能直接运行。")
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            for path in sorted(folder.rglob("*")):
+                if path.is_symlink() or path.is_file():
+                    zf.write(path, Path(folder.name) / path.relative_to(folder))
+    print(f"压缩包  : {archive}  ({archive.stat().st_size / 1024 / 1024:.1f} MB)")
+    return archive
+
+
+def _report(target: Path) -> None:
+    total = sum(f.stat().st_size for f in target.rglob("*") if f.is_file())
+    print(f"输出目录: {target}")
+    print(f"总大小  : {total / 1024 / 1024:.1f} MB")
+
+
+def package_windows(out_root: Path, name: str) -> Path:
     _require(SERVER_EXE, "服务端 exe")
     _require(CLIENT_DIR / "pavl_client.exe", "客户端 exe")
 
-    out_root = Path(args.out)
-    target = out_root / args.name
+    target = out_root / name
     if target.exists():
         shutil.rmtree(target)
 
@@ -207,9 +323,9 @@ def main() -> int:
     (server_dir / "README.txt").write_text(SERVER_README, encoding="utf-8")
 
     # 排除本机运行时产生的数据：PAVL-data 里有配对令牌与日志，绝不能进发布包。
-    skip = {'PAVL-data'}
+    skip = {"PAVL-data"}
     for item in CLIENT_DIR.iterdir():
-        if item.name in skip or item.name.endswith('.log'):
+        if item.name in skip or item.name.endswith(".log"):
             continue
         dest = client_dir / item.name
         if item.is_dir():
@@ -219,22 +335,49 @@ def main() -> int:
     (client_dir / "README.txt").write_text(CLIENT_README, encoding="utf-8")
 
     (target / "README.txt").write_text(ROOT_README, encoding="utf-8")
+    return target
 
-    total = sum(f.stat().st_size for f in target.rglob("*") if f.is_file())
-    print(f"输出目录: {target}")
-    print(f"总大小  : {total / 1024 / 1024:.1f} MB")
 
+def package_macos(out_root: Path, name: str) -> Path:
+    _require(MACOS_APP, "macOS 应用包（在 macOS 上执行 flutter build macos --release）")
+
+    target = out_root / name
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+
+    # symlinks=True 必须带：Flutter.framework 内部是用符号链接组织的版本目录，
+    # 解引用会把包撑大好几倍，还会破坏框架结构。
+    shutil.copytree(MACOS_APP, target / MACOS_APP.name, symlinks=True)
+    (target / "README.txt").write_text(MACOS_README, encoding="utf-8")
+    return target
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="打包 PAVL 分发目录")
+    parser.add_argument("--out", default=str(ROOT / "dist"), help="输出根目录")
+    parser.add_argument("--zip", action="store_true", help="额外生成 zip")
+    parser.add_argument(
+        "--macos", action="store_true", help="打 macOS 客户端包（不带服务端）"
+    )
+    parser.add_argument("--name", default=None, help="目录名")
+    args = parser.parse_args()
+
+    out_root = Path(args.out)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    if args.macos:
+        name = args.name or f"PAVL-{VERSION}-macos"
+        target = package_macos(out_root, name)
+        _report(target)
+        if args.zip:
+            _zip_app_bundle(out_root, target, name)
+        return 0
+
+    target = package_windows(out_root, args.name or f"PAVL-{VERSION}")
+    _report(target)
     if args.zip:
-        archive = out_root / f"{args.name}.zip"
-        if archive.exists():
-            archive.unlink()
-        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-            for path in sorted(target.rglob("*")):
-                if path.is_file():
-                    zf.write(path, path.relative_to(out_root))
-        size = archive.stat().st_size
-        print(f"压缩包  : {archive}  ({size / 1024 / 1024:.1f} MB)")
-
+        _zip_dir(out_root, target)
     return 0
 
 

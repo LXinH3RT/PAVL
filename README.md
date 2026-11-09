@@ -34,12 +34,12 @@ PAVL 把这件事拆成两半：
 | **配对** | 6 位 PIN 一次性配对，换 32 字节令牌，之后自动登录；服务端可查看并吊销已配对设备 |
 | **浏览** | 按目录逐层浏览，显示条目数与文件大小；面包屑可回跳任意一级；没有媒体文件的目录自动隐藏 |
 | **排序** | 文件名 / 自然排序（`第2集` 排在 `第10集` 前面）/ 大小 / 修改时间 |
-| **播放** | 播放暂停、±10 秒、进度拖拽、0.5x–2.0x 变速、音量、全屏 |
+| **播放** | 播放暂停、±10 秒、进度拖拽、0.5x–2.0x 变速、音量、全屏；播放期间阻止系统休眠与熄屏，暂停或退出即释放 |
 | **选轨** | 音轨与字幕轨各自列出切换，按文件记住选择，下次打开自动恢复 |
 | **字幕** | 内嵌轨与同目录外挂字幕自动匹配，主干名 + 集数优先后按相似度兜底；ASS 富文本样式照常渲染 |
 | **进度** | 两种模式：只记本机，或跨设备同步（同一账号在不同机器上接着看）；列表上显示进度与百分比 |
 | **续播** | 重新打开时提示上次位置，「从头开始」或「继续播放」 |
-| **便携** | 客户端数据、日志、临时文件都落在 exe 同级的 `PAVL-data/`，换机器拷走即走 |
+| **便携** | Windows 客户端的数据、日志、临时文件都落在 exe 同级的 `PAVL-data/`，换机器拷走即走；macOS 客户端遵循系统惯例放在 `~/Library/Application Support/PAVL` |
 | **托盘** | 服务端常驻通知区域，右键可添加 / 更换共享目录、查看地址与 PIN，改完立即生效不用重启 |
 | **诊断** | 播放失败时给出原因与日志位置；日志里令牌等敏感字段脱敏 |
 
@@ -71,6 +71,14 @@ PAVL 把这件事拆成两半：
 
 播放时的键盘操作：`空格` 播放 / 暂停，`←` `→` 后退 / 前进 10 秒，`↑` `↓` 音量 ±5，
 `F` 全屏，`Esc` 退出全屏（非全屏时返回上一页）。
+
+**macOS 客户端**
+
+1. 把 `PAVL.app` 拖进「应用程序」文件夹，双击运行。
+2. 第一次启动时系统会问「是否允许 PAVL 查找并连接本地网络上的设备」，**必须点允许**。
+   否则发现不到服务端，拉流也会被拦下。误点了拒绝可以到
+   「系统设置 → 隐私与安全性 → 本地网络」重新打开。
+3. 之后的使用方式与 Windows 客户端一致。
 
 ## 技术要点
 
@@ -109,13 +117,15 @@ PAVL/
 │     ├─ tray.dart             托盘图标与菜单
 │     ├─ tray_icon.dart        内嵌的托盘图标资源
 │     └─ pavl_server.dart      路由与鉴权
-├─ client/                     Flutter 客户端（Windows）
+├─ client/                     Flutter 客户端（Windows / macOS）
 │  ├─ lib/api/                 HTTP 客户端与局域网发现
-│  ├─ lib/store/               本地配置与便携目录
+│  ├─ lib/store/               本地配置与数据目录
 │  ├─ lib/player/              播放控制封装
 │  ├─ lib/ui/                  连接、浏览、播放、设置、配对
-│  ├─ lib/util/                日志与自然排序
-│  └─ assets/fonts/            界面字体与许可
+│  ├─ lib/util/                日志、自然排序、平台差异
+│  ├─ assets/fonts/            界面字体与许可
+│  ├─ windows/                 Windows 平台工程
+│  └─ macos/                   macOS 平台工程
 ├─ scripts/                   构建、打包与界面验证脚本
 └─ docs/images/               文档截图
 ```
@@ -142,14 +152,29 @@ flutter build windows --release
 `setup_media_kit_deps.py` 会把 media_kit 需要的 libmpv / ANGLE 预编译包下载到指定位置，避免
 CMake 在构建时联网下载失败。国内网络下这一步尤其必要。
 
+**客户端**（macOS，在 Mac 上执行）
+
+```
+cd client
+flutter pub get
+flutter build macos --release
+```
+
+macOS 上 libmpv 由 `media_kit_libs_macos_video` 在 `pod install` 阶段自动下载，不需要额外脚本。
+新版 Xcode 只接受 12.0 及以上的部署目标（实测 27.2 支持区间为 12.0 至 27.2.x），而依赖的
+podspec 仍写着 10.9，`macos/Podfile` 里的 `post_install` 会逐 target 覆盖成 12.0——这一项不要删，
+否则每次 `pod install` 都会把旧值写回去并导致编译失败。
+
 **打包**
 
 ```
-python scripts/package.py --zip
+python scripts/package.py --zip           # Windows：服务端 + 客户端
+python scripts/package.py --macos --zip   # macOS：仅客户端 PAVL.app
 ```
 
-产物在 `dist/PAVL-<版本>/`：`server/` 与 `client/` 各带一份运行说明，根目录有一份总说明。
-`--zip` 同时生成压缩包。
+Windows 产物在 `dist/PAVL-<版本>/`：`server/` 与 `client/` 各带一份运行说明，根目录有一份总说明。
+macOS 产物在 `dist/PAVL-<版本>-macos/`，里面只有 `PAVL.app` 与安装说明，不带服务端。
+`.app` 的压缩必须在 macOS 上用 `ditto` 完成，普通 zip 会丢掉符号链接与可执行权限，解压后起不来。
 
 ## 开发约定
 
@@ -165,15 +190,19 @@ python scripts/package.py --zip
 |-|-|
 | Windows 服务端 | ✅ 完整可用 |
 | Windows 客户端 | ✅ 完整可用 |
-| macOS / Android / iOS / Android TV | 未开始 |
+| macOS 客户端 | ✅ 完整可用 |
+| Linux 服务端 | 可编译，缺托盘与原生选择框 |
+| Android / iOS / Android TV | 未开始 |
 | Apple TV | 不做 |
 
 服务端的协议与路由本身不依赖 Windows，移植到其它平台主要工作在于托盘与原生选择框的替代实现。
 
 ## 已知限制
 
-* 客户端目前只有 Windows 版本；服务端在非 Windows 平台会缺少托盘菜单。
+* 服务端只有 Windows 版本；在其它平台可以编译运行，但缺少托盘菜单。
 * 需要用户自行放行防火墙端口，暂未做自检提示。
+* macOS 客户端首次运行需要同意「本地网络」权限。误点拒绝后系统不再询问，此时客户端手动广播一轮
+  若一台服务器都没应答，会提示去「系统设置 → 隐私与安全性 → 本地网络」检查。
 * 文件夹刮削（海报、简介）的接口已预留，界面未做。
 * 片库聚合视图（按最近播放、类型筛选）的接口已就绪，客户端未接入。
 

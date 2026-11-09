@@ -9,6 +9,8 @@
 /// 搜索是启动时自动做的，不需要一个「重新搜索」按钮去提示用户点。
 library;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -16,6 +18,7 @@ import '../api/discovery.dart';
 import '../api/pavl_client.dart';
 import '../app.dart';
 import '../util/app_log.dart';
+import '../util/platform_support.dart';
 
 /// 连接面板。
 class ConnectPanel extends StatefulWidget {
@@ -280,7 +283,7 @@ class _ConnectPanelState extends State<ConnectPanel> {
       final found = await DiscoverySession().run();
       if (!mounted) return null;
       if (found.isEmpty) {
-        setState(() => _error = '没找到服务器，请在上面填上地址');
+        setState(() => _error = _discoveryFailedHint);
         return null;
       }
       if (found.length == 1) return found.first;
@@ -289,6 +292,20 @@ class _ConnectPanelState extends State<ConnectPanel> {
     }
     setState(() => _error = '找到 ${widget.servers.length} 台，请先点一台填好地址');
     return null;
+  }
+
+  /// 广播一轮但一台都没应答时的提示。
+  ///
+  /// macOS 上最常见的失败原因不是网络不通，而是用户上次点了「不允许」：
+  /// 系统对本地网络的拒绝是静默的，广播包发得出去、收不到任何回应，
+  /// 从应用侧看不出和「局域网里确实没有服务器」的区别。所以这里点出
+  /// 该去哪里检查，而不是让用户去猜。
+  String get _discoveryFailedHint {
+    if (Platform.isMacOS) {
+      return '没找到服务器。若服务端确实在同一局域网内，请到「系统设置 → 隐私与安全性 → '
+          '本地网络」确认 PAVL 已勾选；也可以在上面直接填地址。';
+    }
+    return '没找到服务器，请在上面填上地址';
   }
 
   Future<void> _submit() async {
@@ -322,7 +339,7 @@ class _ConnectPanelState extends State<ConnectPanel> {
           pin: pin,
           deviceId: widget.deviceId,
           deviceName: widget.deviceName,
-          platform: 'windows',
+          platform: platformTag,
         );
         logLine('net', '配对成功 ${server.host}:${server.port}');
         if (!mounted) return;

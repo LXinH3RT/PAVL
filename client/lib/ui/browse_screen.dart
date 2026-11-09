@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../api/pavl_client.dart';
 import '../app.dart';
 import '../store/app_store.dart';
+import '../util/app_log.dart';
 import '../util/natural_sort.dart';
 import 'pair_dialog.dart';
 import 'player_screen.dart';
@@ -57,13 +58,22 @@ class _BrowseScreenState extends State<BrowseScreen> {
     super.dispose();
   }
 
-  Future<void> _load(String path) async {
+  /// 载入某个目录的列表。
+  ///
+  /// [rescan] 为真时先让服务端作废目录缓存再重扫一遍，用于工具栏的刷新
+  /// 按钮。日常的进出目录不重扫：服务端的探测缓存本来就有时效，每次点开
+  /// 一个文件夹都全库扫描会把交互拖慢。
+  Future<void> _load(String path, {bool rescan = false}) async {
     setState(() {
       _loading = true;
       _error = null;
       _errorCode = null;
     });
     try {
+      if (rescan) {
+        final count = await _client.refresh();
+        logLine('browse', '已让服务端重扫，共 $count 部');
+      }
       final entries = await _client.browse(path);
       if (!mounted) return;
       setState(() {
@@ -207,7 +217,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
           ),
           IconButton(
             tooltip: '刷新',
-            onPressed: _loading ? null : () => _load(_currentPath),
+            onPressed: _loading ? null : () => _load(_currentPath, rescan: true),
             icon: const Icon(Icons.refresh),
           ),
           const SizedBox(width: 4),

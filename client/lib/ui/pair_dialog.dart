@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import '../api/pavl_client.dart';
 import '../app.dart';
+import '../util/platform_support.dart';
 
 /// 配对对话框。
 class PairDialog extends StatefulWidget {
@@ -62,7 +63,7 @@ class _PairDialogState extends State<PairDialog> {
         pin: pin,
         deviceId: widget.deviceId,
         deviceName: widget.deviceName,
-        platform: 'windows',
+        platform: platformTag,
       );
       if (!mounted) return;
       Navigator.of(context).pop(token);

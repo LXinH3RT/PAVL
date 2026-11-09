@@ -5,12 +5,14 @@
 ///   - 播放进度节流上报（默认 15 秒一次，暂停/退出时立刻上报）
 ///   - 提供音轨字幕轨的选择与记忆
 ///   - 回写媒体信息（时长、分辨率、编码）到服务端，避免服务端依赖 ffprobe
+///   - 播放期间持有屏幕唤醒锁，避免长片看到一半屏幕自己黑掉
 library;
 
 import 'dart:async';
 
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../api/pavl_client.dart';
 import '../store/app_store.dart';
@@ -59,6 +61,9 @@ class PlaybackController {
   /// 是否已经回写过媒体信息。
   bool _metaReported = false;
 
+  /// 媒体信息回写尝试次数，用于在没有分辨率的文件上收手。
+  int _metaAttempts = 0;
+
   /// 是否已经播放到结尾。
   ///
   /// 一旦置真就不再回落：播放结束时会先上报 `finished: true`，随后用户退回
@@ -87,8 +92,17 @@ class PlaybackController {
   /// 是否已经销毁。异步的监视任务用它提前退出，避免碰已释放的播放器。
   bool _disposed = false;
 
+  /// 是否已经在执行销毁流程，用于让 [dispose] 可以被重复调用。
+  bool _tearingDown = false;
+
   /// 渲染/解码侧的失败原因，由日志流捕获，供超时提示使用。
   String? _renderError;
+
+  /// 屏幕唤醒锁当前是否被持有。
+  ///
+  /// 用来避免对系统重复下发同一条指令：`playing` 事件在 seek、切轨、缓冲
+  /// 恢复时会重复触发，每次都调一次平台通道没有意义。
+  bool _wakeLockHeld = false;
 
   /// 播放器事件订阅，销毁时统一取消。
   final List<StreamSubscription<dynamic>> _subscriptions = [];
@@ -120,6 +134,16 @@ class PlaybackController {
       if (completed) {
         unawaited(_onPlaybackCompleted());
       }
+    }));
+    // 屏幕唤醒锁跟着播放状态走：播放中持有，暂停、缓冲卡住、播放结束就放掉。
+    // 用 state.playing 而不是自己记录开关，是因为用户可能用空格键、控制栏
+    // 按钮或系统媒体键暂停，这三条路径都只会反映到播放器状态上。
+    //
+    // 这里不掺 `_finished` 判断：播完之后把进度往回拖再看一遍是常见操作，
+    // 用完成标记挡住会让第二次播放失去唤醒锁。播完那一刻的释放由
+    // [_onPlaybackCompleted] 负责。
+    _subscriptions.add(_player.stream.playing.listen((playing) {
+      unawaited(_setWakeLock(playing));
     }));
     _subscriptions.add(_player.stream.error.listen((message) {
       logLine('mpv', 'error: $message');
@@ -415,8 +439,33 @@ class PlaybackController {
     if (duration > Duration.zero) {
       position = duration;
     }
+    // 播完画面停在最后一帧，用户往往不会立刻关窗口，这时还压着唤醒锁会
+    // 让整台机器整夜不睡。先记下终态再放锁：`playing` 在 keep-open 下可能
+    // 仍是 true，若不先置位，紧接着到来的事件会把锁又申请回来。
+    _finished = true;
+    await _setWakeLock(false);
     await _reportProgress(force: true, finished: true);
     _completedController.add(null);
+  }
+
+  /// 设置屏幕唤醒锁。[enable] 为真时阻止系统休眠与熄屏。
+  ///
+  /// 失败不向上抛：唤醒锁是锦上添花，拿不到也就退回系统默认的熄屏行为，
+  /// 不该让播放本身失败。真正出错时留在日志里，事后能查。
+  Future<void> _setWakeLock(bool enable) async {
+    // 销毁之后不再申请新锁；但释放必须放行——[dispose] 里正是先置
+    // `_disposed` 再释放，这里若一并挡掉，锁就永远留在系统上。
+    if (_disposed && enable) return;
+    if (_wakeLockHeld == enable) return;
+    // 先记状态再调平台通道。平台侧重复调用本身是幂等的，但这一层要保证
+    // 连续两次 playing=true 只走一次通道；即使下面抛错，也不至于反复重试。
+    _wakeLockHeld = enable;
+    try {
+      await WakelockPlus.toggle(enable: enable);
+      logLine('play', '${enable ? '已申请' : '已释放'}屏幕唤醒锁');
+    } catch (error) {
+      logLine('play', '${enable ? '申请' : '释放'}屏幕唤醒锁失败：$error');
+    }
   }
 
   /// 上报进度。位置没变就跳过，除非 [force]。
@@ -453,25 +502,48 @@ class PlaybackController {
   Future<void> _reportMetaIfNeeded() async {
     if (_metaReported) return;
     final state = _player.state;
-    final video = state.tracks.video;
-    if (video.isEmpty) return;
-    final track = video.first;
     final meta = <String, Object?>{};
     if (state.duration > Duration.zero) {
       meta['duration'] = state.duration.inMilliseconds / 1000.0;
     }
-    if (track.w != null) meta['width'] = track.w;
-    if (track.h != null) meta['height'] = track.h;
-    if (track.codec != null) meta['videoCodec'] = track.codec;
-    if (track.fps != null) meta['fps'] = track.fps;
-    final audio = state.tracks.audio;
-    if (audio.isNotEmpty) {
-      final a = audio.first;
-      if (a.codec != null) meta['audioCodec'] = a.codec;
-      if (a.channelscount != null) meta['audioChannels'] = a.channelscount;
+
+    // 轨道列表里前两条是 libmpv 塞进来的 `auto`、`no` 伪轨道，它们的
+    // w/h/codec 全是 null。直接取 first() 拿到的就是 auto，回写给服务端的
+    // 只有时长，分辨率与编码永远缺。必须跳过这两条。
+    final track = _firstRealVideo(state.tracks.video);
+    if (track != null) {
+      if (track.w != null) meta['width'] = track.w;
+      if (track.h != null) meta['height'] = track.h;
+      if (track.codec != null) meta['videoCodec'] = track.codec;
+      if (track.fps != null) meta['fps'] = track.fps;
+    }
+
+    // 轨道信息来自解封装层，容器里不带显示尺寸时（部分 mkv 只写编码尺寸）
+    // 这里就是空的。真解出画面之后 [VideoParams] 一定有准确的宽高，用它兜底
+    // 比留空更有价值——服务端靠这个字段挑海报、算宽高比。
+    if (meta['width'] == null) {
+      final params = state.videoParams;
+      if (params.w != null && params.w! > 0) {
+        meta['width'] = params.w;
+        meta['height'] = params.h;
+      }
+    }
+
+    final audio = _firstRealAudio(state.tracks.audio);
+    if (audio != null) {
+      if (audio.codec != null) meta['audioCodec'] = audio.codec;
+      if (audio.channelscount != null) meta['audioChannels'] = audio.channelscount;
     }
     if (meta.isEmpty) return;
-    _metaReported = true;
+    // 只有拿到分辨率才算「报完」。首次上报往往发生在解封装刚结束、轨道还没
+    // 填全的时候，若此刻就收手，width/height 会永久缺失。
+    if (meta['width'] != null) {
+      _metaReported = true;
+    } else if (_metaAttempts >= 3) {
+      // 纯音频文件永远没有分辨率，重试三次后放弃，避免每 15 秒空转。
+      _metaReported = true;
+    }
+    _metaAttempts++;
     try {
       await client.putMeta(mediaDetail.path, meta);
     } on PavlApiError {
@@ -482,9 +554,19 @@ class PlaybackController {
   }
 
   /// 退出前调用：停止定时器、最后一次上报、释放播放器。
+  ///
+  /// 可以重复调用：界面退出时调一次，测试或异常路径上可能再调一次，第二次
+  /// 直接返回。不做这层保护的话，[Player.dispose] 会断言失败，
+  /// 报 `Assertion failed: [Player] has been disposed`，把调用方原本的
+  /// 逻辑打断。
   Future<void> dispose() async {
+    if (_tearingDown) return;
+    _tearingDown = true;
     _disposed = true;
     logLine('play', '关闭播放器，停在 $position / $duration');
+    // 释放唤醒锁放在最前面：后面几步都要碰播放器，任何一步抛错都不该让
+    // 整台机器保持常亮。
+    await _setWakeLock(false);
     _reportTimer?.cancel();
     _reportTimer = null;
     await _reportProgress(force: true);
@@ -496,6 +578,31 @@ class PlaybackController {
     await _errorController.close();
     await _player.dispose();
   }
+}
+
+/// 取第一条真实轨道，跳过 libmpv 塞进列表的 `auto` 与 `no`。
+///
+/// libmpv 的 track-list 开头固定是这两条伪轨道，id 分别是 `auto`、`no`，
+/// 除 id 之外全是 null。判断不能只看 id——某些版本里伪轨道排在中间——所以
+/// 两条规则一起用：id 命中伪轨道名，或者整条轨道没有任何可用信息。
+bool _isPseudoTrack(VideoTrack t) =>
+    t.id == 'auto' || t.id == 'no' || (t.codec == null && t.w == null);
+
+bool _isPseudoAudio(AudioTrack t) =>
+    t.id == 'auto' || t.id == 'no' || (t.codec == null && t.channelscount == null);
+
+VideoTrack? _firstRealVideo(List<VideoTrack> tracks) {
+  for (final track in tracks) {
+    if (!_isPseudoTrack(track)) return track;
+  }
+  return null;
+}
+
+AudioTrack? _firstRealAudio(List<AudioTrack> tracks) {
+  for (final track in tracks) {
+    if (!_isPseudoAudio(track)) return track;
+  }
+  return null;
 }
 
 /// 可用轨道列表的快照，供 UI 构建菜单。
