@@ -210,9 +210,14 @@ The three packages currently produced:
 
 | Package | Contents |
 | --- | --- |
-| `PAVL_windows_server_portable_<version>` | `pavl.exe` and a short readme |
-| `PAVL_windows_client_portable_<version>` | `pavl_client.exe`, runtime DLLs and `data/` |
-| `PAVL_macos_client_<version>` | `PAVL.app` and installation notes |
+| `PAVL_windows_server_portable_<version>` | `pavl.exe`, a short readme and `LICENSE.txt` |
+| `PAVL_windows_client_portable_<version>` | `pavl_client.exe`, runtime DLLs, `data/`, notes and `LICENSE.txt` |
+| `PAVL_macos_client_<version>` | `PAVL.app`, installation notes and `LICENSE.txt` |
+
+All three packages carry a copy of `LICENSE.txt`: lpinyin (BSD 2-Clause), the Dart runtime and Flutter
+(BSD-3-Clause) and MiSans (Apache 2.0) all require the copyright notice to travel with any
+redistribution, and what users receive is the extracted folder, so keeping the file only in the source
+repository is not enough.
 
 The `.app` archive has to be produced by `ditto` on macOS; a plain zip loses the symlinks and
 executable bits and will not launch after extraction.
@@ -264,3 +269,7 @@ Third-party components bundled with the client:
   with any redistribution, and both are in the repository:
   * `client/assets/fonts/MiSans-LICENSE.txt` — the full Apache License 2.0 text
   * `client/assets/fonts/NOTICE.txt` — font origin, usage and no-modification statement
+* **lpinyin** (BSD 2-Clause), used by the server to convert Chinese characters to pinyin for sorting. The
+  dictionary is compiled into `pavl.exe` and no external file is loaded at runtime, but redistributing the
+  binary still requires including its copyright notice; the full text is in [LICENSE](LICENSE).
+* **Dart runtime** (BSD-3-Clause), embedded in the output of `dart compile exe`.

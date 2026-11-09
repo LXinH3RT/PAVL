@@ -42,3 +42,34 @@ MiSans (https://hyperos.mi.com/font/) — Apache License 2.0。
   许可证全文见 client/assets/fonts/MiSans-LICENSE.txt，来源与用途说明见
   client/assets/fonts/NOTICE.txt。Apache License 2.0 要求再分发时保留许可证
   与声明文件，二者均随安装包一同分发。
+
+lpinyin 2.0.3 (https://pub.dev/packages/lpinyin) — BSD 2-Clause。
+  服务端用它把汉字转成拼音，只为排序服务。字典以常量字符串的形式编进
+  pavl.exe，运行时不加载任何外部文件，但再分发二进制时仍需随附以下声明。
+
+  Copyright (c) 2018, Sky24n
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+
+  * Redistributions of source code must retain the above copyright notice, this
+    list of conditions and the following disclaimer.
+
+  * Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+  OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Dart 运行时与编译产物 — BSD-3-Clause。
+  服务端以 dart compile exe 编译为单文件，运行时随程序内嵌，其再分发条款适用。

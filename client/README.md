@@ -118,3 +118,7 @@ python scripts/package.py --macos --zip      # macOS（必须在 macOS 上跑）
 
 界面字体为 MiSans，按 Apache License 2.0 随程序分发，许可证与声明见 `assets/fonts/`。播放内核
 libmpv 按 LGPL-2.1-or-later 动态链接使用。完整说明见仓库根目录的 `LICENSE`。
+
+打包时会把这个文件复制成发布包里的 `LICENSE.txt`：MiSans（Apache 2.0）、Flutter 运行时
+（BSD-3-Clause）与 lpinyin（BSD 2-Clause，仅服务端）都要求再分发时随附版权声明，用户拿到的
+是解压后的文件夹，只在仓库里放一份不够。

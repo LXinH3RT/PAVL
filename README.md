@@ -193,9 +193,13 @@ python scripts/package.py --all --zip        # 当前平台上能打的全打
 
 | 包名 | 内容 |
 | --- | --- |
-| `PAVL_windows_server_portable_<版本>` | `pavl.exe` 与运行说明 |
-| `PAVL_windows_client_portable_<版本>` | `pavl_client.exe`、运行时 DLL 与 `data/` |
-| `PAVL_macos_client_<版本>` | `PAVL.app` 与安装说明 |
+| `PAVL_windows_server_portable_<版本>` | `pavl.exe`、运行说明与 `LICENSE.txt` |
+| `PAVL_windows_client_portable_<版本>` | `pavl_client.exe`、运行时 DLL、`data/`、说明与 `LICENSE.txt` |
+| `PAVL_macos_client_<版本>` | `PAVL.app`、安装说明与 `LICENSE.txt` |
+
+三个包都带一份 `LICENSE.txt`：lpinyin（BSD 2-Clause）、Dart 运行时与 Flutter（BSD-3-Clause）、
+MiSans（Apache 2.0）都要求再分发时随附版权声明，而用户拿到的是解压出来的文件夹，
+只在代码仓库里放一份不够。
 
 `.app` 的压缩必须在 macOS 上用 `ditto` 完成，普通 zip 会丢掉符号链接与可执行权限，解压后起不来。
 
@@ -240,3 +244,6 @@ python scripts/package.py --all --zip        # 当前平台上能打的全打
   `MiSansVF.ttf`，未做子集化或改刻；许可证要求再分发时保留许可与声明，两者都在仓库里：
   * `client/assets/fonts/MiSans-LICENSE.txt` —— Apache License 2.0 全文
   * `client/assets/fonts/NOTICE.txt` —— 字体来源、用途与未修改声明
+* **lpinyin**（BSD 2-Clause），服务端用它把汉字转成拼音做排序。字典编进 `pavl.exe`，
+  运行时不加载外部文件，但再分发二进制时仍需随附其版权声明，全文见 [LICENSE](LICENSE)。
+* **Dart 运行时**（BSD-3-Clause），随 `dart compile exe` 的产物内嵌。

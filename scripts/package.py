@@ -25,6 +25,7 @@
     PAVL_windows_server_portable_<版本>/
       pavl.exe          服务端，双击即用
       README.txt        首次运行说明
+      LICENSE.txt       许可证与第三方组件声明
 
 产物布局（Windows 客户端便携版）：
 
@@ -32,12 +33,14 @@
       pavl_client.exe   客户端
       *.dll, data/      客户端运行时
       README.txt        使用说明
+      LICENSE.txt       许可证与第三方组件声明
 
 产物布局（macOS 客户端）：
 
     PAVL_macos_client_<版本>/
       PAVL.app          客户端，拖进「应用程序」即可
       README.txt        安装与权限说明
+      LICENSE.txt       许可证与第三方组件声明
 
 服务端与客户端分开打包：只架服务器的人不必下一份 40 多 MB 的客户端，
 只装客户端的人也不必看见服务端的 exe。
@@ -227,6 +230,13 @@ PAVL 客户端（Windows 便携版）
 
 删除该文件夹等于恢复出厂设置。
 
+许可
+----
+本包内含 libmpv（LGPL-2.1-or-later，GPL 组件已关闭，动态链接使用）、
+MiSans 字体（Apache License 2.0）与 Flutter 运行时（BSD-3-Clause）。
+完整声明见同目录的 LICENSE.txt，字体许可全文在
+data\\flutter_assets\\assets\\fonts\\ 下。
+
 Windows 安全提示
 ----------------
 本程序没有购买代码签名证书，首次运行时 Windows SmartScreen 可能提示
@@ -269,10 +279,9 @@ PAVL — Play All Videos in Lan
 
 许可
 ----
-客户端内含 libmpv，按 LGPLv2.1+ 分发（GPL 组件已关闭）。
-客户端内含 MiSans 字体，按 Apache License 2.0 分发，
-许可证与声明见客户端 data\\flutter_assets\\assets\\fonts\\ 下的
-MiSans-LICENSE.txt 与 NOTICE.txt。
+程序内含 lpinyin（BSD 2-Clause），用来把汉字转成拼音做排序。
+字典编进 exe 里，不加载外部文件，但再分发二进制时仍需随附其版权声明。
+LICENSE.txt 是完整声明，含 lpinyin 与 Dart 运行时的条款。
 """
 
 MACOS_README = """\
@@ -315,6 +324,13 @@ PAVL macOS 客户端
     ~/Library/Application Support/PAVL/client.log     播放日志
 
 删除这个文件夹等于恢复出厂设置。设置页里的「打开日志目录」会直接定位到那里。
+
+许可
+----
+本包内含 libmpv（LGPL-2.1-or-later，GPL 组件已关闭，动态链接使用）、
+MiSans 字体（Apache License 2.0）与 Flutter 运行时（BSD-3-Clause）。
+完整声明见同目录的 LICENSE.txt，字体许可全文在 PAVL.app 内的
+Contents/Frameworks/App.framework/Resources/flutter_assets/assets/fonts/ 下。
 
 服务端
 ------
@@ -389,6 +405,17 @@ def _report(target: Path) -> None:
     print(f"总大小  : {total / 1024 / 1024:.1f} MB")
 
 
+def _copy_license(target: Path) -> None:
+    """把仓库根目录的 LICENSE 一并放进发布包。
+
+    第三方组件的许可要求再分发时随附版权声明：lpinyin 是 BSD 2-Clause、
+    Dart 运行时与 Flutter 是 BSD-3-Clause、MiSans 是 Apache 2.0。这些条款
+    写在 LICENSE 里，只留在代码仓库是不够的——用户拿到的是解压出来的文件夹，
+    所以每个包都要带一份。
+    """
+    shutil.copy2(ROOT / "LICENSE", target / "LICENSE.txt")
+
+
 def package_server(out_root: Path, name: str) -> Path:
     """服务端包：只有一个 exe 和说明，不带客户端。"""
     _require(SERVER_EXE, "服务端 exe")
@@ -396,6 +423,7 @@ def package_server(out_root: Path, name: str) -> Path:
     target = _prepare(out_root, name)
     shutil.copy2(SERVER_EXE, target / "pavl.exe")
     (target / "README.txt").write_text(SERVER_README, encoding="utf-8")
+    _copy_license(target)
     return target
 
 
@@ -418,6 +446,7 @@ def package_portable(out_root: Path, name: str) -> Path:
         else:
             shutil.copy2(item, dest)
     (target / "README.txt").write_text(CLIENT_README, encoding="utf-8")
+    _copy_license(target)
     return target
 
 
@@ -431,6 +460,7 @@ def package_macos(out_root: Path, name: str) -> Path:
     # 解引用会把包撑大好几倍，还会破坏框架结构。
     shutil.copytree(MACOS_APP, target / MACOS_APP.name, symlinks=True)
     (target / "README.txt").write_text(MACOS_README, encoding="utf-8")
+    _copy_license(target)
     return target
 
 
