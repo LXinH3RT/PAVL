@@ -88,8 +88,13 @@ def find_window() -> int:
     found: list[int] = []
 
     def cb(hwnd: int, _param: object) -> bool:  # noqa: ANN401
-        if win32gui.GetClassName(hwnd) == WINDOW_CLASS:
-            found.append(hwnd)
+        if win32gui.GetClassName(hwnd) != WINDOW_CLASS:
+            return True
+        # Flutter 还会建一个 1x1 的隐藏辅助窗口，单纯取第一个会抓到它。
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        if right - left < 200 or bottom - top < 200:
+            return True
+        found.append(hwnd)
         return True
 
     win32gui.EnumWindows(cb, None)

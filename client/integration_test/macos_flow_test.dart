@@ -312,10 +312,12 @@ Future<String?> _findFirstVideo(PavlClient client) async {
     return const [];
   }
 
-  final videos = await walk('', 1);
+  final videos = await walk('', 3);
   if (videos.isEmpty) return null;
 
-  // 有字幕的优先，字幕用例才能跑起来。
-  final withSubtitle = videos.where((e) => e.subtitles.isNotEmpty);
-  return (withSubtitle.isNotEmpty ? withSubtitle.first : videos.first).path;
+  // 有字幕的优先，字幕用例才能跑起来；同组里挑最大的，避开占位文件。
+  final withSubtitle = videos.where((e) => e.subtitles.isNotEmpty).toList();
+  final pool = withSubtitle.isNotEmpty ? withSubtitle : videos;
+  pool.sort((a, b) => b.size.compareTo(a.size));
+  return pool.first.path;
 }

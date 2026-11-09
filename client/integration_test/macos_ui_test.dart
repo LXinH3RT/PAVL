@@ -52,27 +52,33 @@ Future<String> _pairToken() async {
   }
 }
 
-/// 从根目录往下找第一个视频文件。
+/// 从根目录往下找最大的视频文件。
+///
+/// 挑最大的而不是第一个：测试目录里常掺着几百字节的占位文件，它们同样带
+/// `.mkv` 后缀、同样被判成视频，但 libmpv 解不出帧。
 Future<String?> _findFirstVideo(ServerConnection connection) async {
   final client = PavlClient(connection: connection);
   try {
-    Future<String?> walk(String path, int depth) async {
-      if (depth < 0) return null;
+    final found = <BrowseEntry>[];
+
+    Future<void> walk(String path, int depth) async {
+      if (depth < 0) return;
       final entries = await client.browse(path);
       for (final entry in entries) {
-        if (!entry.isDir && entry.kind == 'video') return entry.path;
+        if (!entry.isDir && entry.kind == 'video') {
+          found.add(entry);
+        } else if (entry.isDir) {
+          await walk(entry.path, depth - 1);
+        }
       }
-      for (final entry in entries) {
-        if (!entry.isDir) continue;
-        final found = await walk(entry.path, depth - 1);
-        if (found != null) return found;
-      }
-      return null;
     }
 
-    // 注意 return await：直接 `return walk(...)` 会让 finally 先跑，
-    // 把还在用的 HttpClient 关掉，报 "Bad state: Client is closed"。
-    return await walk('', 1);
+    // 注意 await：直接 `return walk(...)` 会让 finally 先跑，把还在用的
+    // HttpClient 关掉，报 "Bad state: Client is closed"。
+    await walk('', 3);
+    if (found.isEmpty) return null;
+    found.sort((a, b) => b.size.compareTo(a.size));
+    return found.first.path;
   } finally {
     client.close();
   }

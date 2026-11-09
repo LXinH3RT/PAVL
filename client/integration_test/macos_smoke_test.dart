@@ -197,25 +197,32 @@ void main() {
   });
 }
 
-/// 从根目录往下找第一个视频文件，返回它的相对路径。
+/// 从根目录往下找最大的视频文件，返回它的相对路径。
 ///
-/// 只走两层：测试媒体目录的结构通常是一层分类、一层影片，再深就该靠
-/// `PAVL_TEST_MEDIA` 指定了。
+/// 挑最大的而不是第一个：测试目录里常掺着几百字节的占位文件，它们同样带
+/// `.mkv` 后缀、同样被判成视频，但 libmpv 解不出帧，会让解码用例假阴性。
+/// 真实影片总是目录里最大的那个。
+///
+/// 走三层：测试媒体目录的结构通常是一层分类、一层影片，留一层余量；再深
+/// 就该靠 `PAVL_TEST_MEDIA` 指定了。
 Future<String?> _findFirstVideo(PavlClient client) async {
-  Future<String?> walk(String path, int depth) async {
-    if (depth < 0) return null;
+  final found = <BrowseEntry>[];
+
+  Future<void> walk(String path, int depth) async {
+    if (depth < 0) return;
     final entries = await client.browse(path);
-    // 先看当前层的文件，再看子目录，这样「分类/影片」两层结构一次就命中。
     for (final entry in entries) {
-      if (!entry.isDir && entry.kind == 'video') return entry.path;
+      if (!entry.isDir && entry.kind == 'video') {
+        found.add(entry);
+      } else if (entry.isDir) {
+        // 注意 await：不等待会让并发的递归与本函数的收集顺序错乱。
+        await walk(entry.path, depth - 1);
+      }
     }
-    for (final entry in entries) {
-      if (!entry.isDir) continue;
-      final found = await walk(entry.path, depth - 1);
-      if (found != null) return found;
-    }
-    return null;
   }
 
-  return walk('', 1);
+  await walk('', 3);
+  if (found.isEmpty) return null;
+  found.sort((a, b) => b.size.compareTo(a.size));
+  return found.first.path;
 }

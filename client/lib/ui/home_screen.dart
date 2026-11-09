@@ -53,13 +53,20 @@ class _HomeScreenState extends State<HomeScreen> {
       final probed = await probeHost(last.host, last.port);
       if (probed != null && mounted) {
         // 有令牌就一步到位，没有就让用户在面板里补 PIN。
+        //
+        // 这一步直接进浏览页，界面上不会留下痕迹；出问题时（比如地址过期、
+        // 令牌被吊销）从日志里只能看到启动那一行，判断不出到底走没走自动
+        // 连接、卡在哪一步。所以每一跳都留一行。
         if (last.hasToken) {
+          logLine('net', '自动连接 ${last.host}:${last.port}，已有令牌，直接进浏览页');
           await _enterConnection(last);
           return;
         }
+        logLine('net', '自动连接 ${last.host}:${last.port}，缺令牌，回面板补 PIN');
         await _enterServer(probed);
         return;
       }
+      logLine('net', '上次的服务器 ${last.host}:${last.port} 探不通，改为广播发现');
     }
     if (mounted) await _startDiscovery();
   }

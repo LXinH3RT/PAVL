@@ -212,6 +212,66 @@ class MediaEntry {
         season: (json['season'] as num?)?.toInt(),
         episode: (json['episode'] as num?)?.toInt(),
       );
+
+  /// 显示用的标题：解析不出可读标题时退回文件名。
+  String get displayTitle => title.isEmpty ? name : title;
+
+  /// 季集标签，`S01E02` / `第 2 季第 10 集`，缺信息时为空串。
+  String get episodeLabel {
+    final hasSeason = season != null && season! > 0;
+    final hasEpisode = episode != null && episode! > 0;
+    if (!hasSeason && !hasEpisode) return '';
+    final buffer = StringBuffer();
+    if (hasSeason) buffer.write('第 $season 季');
+    if (hasEpisode) {
+      if (buffer.isNotEmpty) buffer.write(' ');
+      buffer.write('第 $episode 集');
+    }
+    return buffer.toString();
+  }
+}
+
+/// 片库的一页。
+///
+/// 除了当前页的条目，还带总数与是否还有下一页——分页控件要靠这两个字段决定
+/// 按钮可用状态，只靠「这一页拿满了 60 条」来推断会在整页刚好够数时多翻一次
+/// 空页。
+class LibraryPage {
+  LibraryPage({
+    required this.items,
+    required this.total,
+    required this.page,
+    required this.pageSize,
+    required this.hasMore,
+  });
+
+  final List<MediaEntry> items;
+  final int total;
+  final int page;
+  final int pageSize;
+  final bool hasMore;
+
+  static LibraryPage fromJson(Map<String, Object?> json) {
+    final raw = json['items'] as List<Object?>? ?? const [];
+    return LibraryPage(
+      items: [
+        for (final item in raw)
+          if (item is Map<String, Object?>) MediaEntry.fromJson(item),
+      ],
+      total: (json['total'] as num?)?.toInt() ?? 0,
+      page: (json['page'] as num?)?.toInt() ?? 1,
+      pageSize: (json['pageSize'] as num?)?.toInt() ?? 60,
+      hasMore: json['hasMore'] as bool? ?? false,
+    );
+  }
+
+  static final LibraryPage empty = LibraryPage(
+    items: const [],
+    total: 0,
+    page: 1,
+    pageSize: 60,
+    hasMore: false,
+  );
 }
 
 /// 一条播放进度。
@@ -258,9 +318,58 @@ class ProgressRecord {
   }
 }
 
+/// 最近播放列表里的一条。
+///
+/// 服务端只存了进度（路径、位置、时长、更新时间），没有标题与文件名，所以
+/// 界面上要显示可读名称时得自己从路径里截——这里提供 [displayName] 做这件事，
+/// 免得到处重复写字符串处理。
+class RecentEntry {
+  RecentEntry({
+    required this.path,
+    required this.position,
+    required this.duration,
+    this.finished = false,
+    this.updatedAt = 0,
+    this.deviceName = '',
+  });
+
+  final String path;
+  final double position;
+  final double duration;
+  final bool finished;
+  final int updatedAt;
+  final String deviceName;
+
+  /// 已看比例，0–1。
+  double get ratio {
+    if (duration <= 0) return 0;
+    return (position / duration).clamp(0.0, 1.0);
+  }
+
+  /// 路径末段。`电影/某片.mkv` → `某片.mkv`。
+  String get displayName {
+    final idx = path.lastIndexOf('/');
+    return idx < 0 ? path : path.substring(idx + 1);
+  }
+
+  /// 上一级目录，用于在最近列表里补充位置信息。
+  String get parentPath {
+    final idx = path.lastIndexOf('/');
+    return idx < 0 ? '' : path.substring(0, idx);
+  }
+
+  static RecentEntry fromJson(Map<String, Object?> json) => RecentEntry(
+        path: json['path'] as String? ?? '',
+        position: (json['position'] as num?)?.toDouble() ?? 0,
+        duration: (json['duration'] as num?)?.toDouble() ?? 0,
+        finished: json['finished'] as bool? ?? false,
+        updatedAt: (json['updatedAt'] as num?)?.toInt() ?? 0,
+        deviceName: json['deviceName'] as String? ?? '',
+      );
+}
+
 /// 与某个视频关联的外挂字幕。
-class SidecarSubtitle {
-  SidecarSubtitle({
+class SidecarSubtitle {  SidecarSubtitle({
     required this.name,
     required this.path,
     this.size = 0,
@@ -416,21 +525,22 @@ class PavlClient {
   }
 
   /// 片库分页列表。
-  Future<List<MediaEntry>> library({
+  ///
+  /// 顺序由服务端决定（按标题的自然序，汉字按拼音），客户端不再重排：分页
+  /// 是把全库切片之后再发过来的，客户端若只对当前页排序，跨页的顺序就会乱。
+  Future<LibraryPage> library({
     int page = 1,
     int pageSize = 60,
     String? query,
+    String? kind,
   }) async {
     final json = await _getJson('/api/v1/library', query: {
       'page': '$page',
       'pageSize': '$pageSize',
       if (query != null && query.isNotEmpty) 'q': query,
+      if (kind != null && kind.isNotEmpty) 'kind': kind,
     });
-    final items = json['items'] as List<Object?>? ?? const [];
-    return [
-      for (final item in items)
-        if (item is Map<String, Object?>) MediaEntry.fromJson(item),
-    ];
+    return LibraryPage.fromJson(json);
   }
 
   /// 单个视频的详情（含外挂字幕与最近进度）。
@@ -469,12 +579,15 @@ class PavlClient {
   }
 
   /// 最近播放列表。
-  Future<List<Map<String, Object?>>> recent({int limit = 20}) async {
+  ///
+  /// 服务端按最后更新时间倒序返回，每条形如
+  /// `{path, position, duration, finished, updatedAt, deviceName?}`。
+  Future<List<RecentEntry>> recent({int limit = 20}) async {
     final json = await _getJson('/api/v1/recent', query: {'limit': '$limit'});
     final items = json['items'] as List<Object?>? ?? const [];
     return [
       for (final item in items)
-        if (item is Map<String, Object?>) item,
+        if (item is Map<String, Object?>) RecentEntry.fromJson(item),
     ];
   }
 

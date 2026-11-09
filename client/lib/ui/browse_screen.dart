@@ -9,8 +9,8 @@ import '../api/pavl_client.dart';
 import '../app.dart';
 import '../store/app_store.dart';
 import '../util/app_log.dart';
-import '../util/natural_sort.dart';
 import 'pair_dialog.dart';
+import 'library_screen.dart';
 import 'player_screen.dart';
 import 'settings_dialog.dart';
 import 'widgets/entry_tile.dart';
@@ -98,15 +98,21 @@ class _BrowseScreenState extends State<BrowseScreen> {
     }
   }
 
-  /// 目录在前，内部再按自然序排。服务端已排序，这里再做一次是为了
-  /// 应对「目录和文件混排」的情况，保证视觉上分组清晰。
+  /// 目录在前，组内保持服务端给的顺序。
+  ///
+  /// 排序规则只存在于服务端一套（见 `server/lib/sort_key.dart`）：汉字按拼音、
+  /// 数字按数值、大小写不敏感。客户端如果再排一遍，两套规则一旦有出入，同一
+  /// 批名称在不同层级就会排出不同顺序，而且改动一处要同步两处。
+  ///
+  /// 这里只做分组，不做比较：`List.sort` 不保证稳定，所以用两次遍历把目录和
+  /// 文件各自按原序收集，避免组内顺序被重排。
   List<BrowseEntry> _sortEntries(List<BrowseEntry> entries) {
-    final list = [...entries];
-    list.sort((a, b) {
-      if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
-      return naturalCompare(a.name, b.name);
-    });
-    return list;
+    final dirs = <BrowseEntry>[];
+    final files = <BrowseEntry>[];
+    for (final entry in entries) {
+      (entry.isDir ? dirs : files).add(entry);
+    }
+    return [...dirs, ...files];
   }
 
   void _syncCrumbs(String path) {
@@ -148,6 +154,20 @@ class _BrowseScreenState extends State<BrowseScreen> {
     );
     if (!mounted) return;
     setState(() {});
+  }
+
+  /// 打开片库页：全库拉平按标题排，与按目录浏览互补。
+  Future<void> _openLibrary() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => LibraryScreen(
+          store: widget.store,
+          client: _client,
+        ),
+      ),
+    );
+    // 片库页里可能播过片，回来刷新一下进度显示与目录内容。
+    if (mounted) await _load(_currentPath);
   }
 
   /// 打开一个视频。
@@ -210,6 +230,11 @@ class _BrowseScreenState extends State<BrowseScreen> {
                 label: const Text('配对'),
               ),
             ),
+          IconButton(
+            tooltip: '片库',
+            onPressed: _openLibrary,
+            icon: const Icon(Icons.video_library_outlined),
+          ),
           IconButton(
             tooltip: '设置',
             onPressed: _showSettings,

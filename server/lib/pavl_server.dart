@@ -14,11 +14,12 @@ import 'config.dart';
 import 'discovery.dart';
 import 'library.dart';
 import 'media.dart';
+import 'sort_key.dart';
 import 'subtitle_match.dart';
 import 'streaming.dart';
 
 /// 服务端版本，出现在 /api/v1/info 与发现应答里。
-const String pavlVersion = '0.2.0';
+const String pavlVersion = '0.2.1';
 
 /// API 版本，客户端据此判断兼容性。
 const int apiVersion = 1;
@@ -379,6 +380,14 @@ class PavlServer {
     if (kindFilter != null) {
       all = all.where((e) => e.kind.name == kindFilter).toList();
     }
+    // 片库是跨目录的扁平列表，按标题排比按路径排更符合直觉：索引里的默认顺序
+    // 是按 relativePath，那会把同一部剧的各个分集打散到不同目录段之间。
+    // 标题相同时再比路径，保证顺序稳定、翻页不会重复或漏项。
+    all = [...all]..sort((a, b) {
+        final byTitle = compareNames(a.parsed.title, b.parsed.title);
+        if (byTitle != 0) return byTitle;
+        return compareNames(a.relativePath, b.relativePath);
+      });
 
     final total = all.length;
     final startIdx = ((page - 1) * pageSize).clamp(0, total);
@@ -687,7 +696,7 @@ class PavlServer {
       // 目录不可读就当没有字幕。
     }
     int byName(Map<String, Object?> a, Map<String, Object?> b) =>
-        naturalCompare(a['name']! as String, b['name']! as String);
+        compareNames(a['name']! as String, b['name']! as String);
     if (matched.isNotEmpty) {
       matched.sort(byName);
       return matched;

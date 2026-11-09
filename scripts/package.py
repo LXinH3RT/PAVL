@@ -1,28 +1,46 @@
 #!/usr/bin/env python3
-"""把服务端与客户端产物打成一个可分发目录。
+"""把服务端与客户端分别打成可分发的包。
 
 用法：
-    python scripts/package.py                 # 生成 dist/PAVL-<版本>/
-    python scripts/package.py --zip           # 同时压成 zip
-    python scripts/package.py --out D:/x      # 换输出目录
-    python scripts/package.py --macos --zip   # 生成 macOS 客户端包
+    python scripts/package.py --server --zip       # 服务端（Windows）
+    python scripts/package.py --portable --zip     # Windows 客户端便携版
+    python scripts/package.py --macos --zip        # macOS 客户端
+    python scripts/package.py --all --zip          # 当前平台上能打的全打
 
-产物布局（Windows）：
+命名规则（发布包与目录同名）：
 
-    PAVL-<版本>/
-      server/pavl.exe              服务端，双击即用
-      server/README.txt            首次运行说明
-      client/pavl_client.exe       客户端
-      client/*.dll, data/          客户端运行时
-      README.txt                   总说明
+    软件名_平台名_客户端/服务端_便携版_版本号
 
-产物布局（macOS）：
+    - 「便携版」只出现在便携形态上，安装版省略这一段。
+      目前 Windows 的服务端与客户端都是便携形态（解压即用、删目录即卸载），
+      所以两者都带 portable；macOS 是一个拖进「应用程序」的 .app，不带。
+    - 平台名取 windows / macos / linux。
 
-    PAVL-<版本>-macos/
-      PAVL.app                     客户端，拖进「应用程序」即可
-      README.txt                   安装与权限说明
+    PAVL_windows_server_portable_<版本>
+    PAVL_windows_client_portable_<版本>
+    PAVL_macos_client_<版本>
 
-服务端只有 Windows 版本，macOS 包里不带服务端。
+产物布局（服务端）：
+
+    PAVL_windows_server_portable_<版本>/
+      pavl.exe          服务端，双击即用
+      README.txt        首次运行说明
+
+产物布局（Windows 客户端便携版）：
+
+    PAVL_windows_client_portable_<版本>/
+      pavl_client.exe   客户端
+      *.dll, data/      客户端运行时
+      README.txt        使用说明
+
+产物布局（macOS 客户端）：
+
+    PAVL_macos_client_<版本>/
+      PAVL.app          客户端，拖进「应用程序」即可
+      README.txt        安装与权限说明
+
+服务端与客户端分开打包：只架服务器的人不必下一份 40 多 MB 的客户端，
+只装客户端的人也不必看见服务端的 exe。
 """
 
 from __future__ import annotations
@@ -56,7 +74,24 @@ CLIENT_DIR = ROOT / "client" / "build" / "windows" / "x64" / "runner" / "Release
 MACOS_APP = (
     ROOT / "client" / "build" / "macos" / "Build" / "Products" / "Release" / "PAVL.app"
 )
-VERSION = "0.2.0"
+VERSION = "0.2.1"
+
+# 命名规则见模块说明。软件名固定，其它三段由平台与角色拼出来。
+APP_NAME = "PAVL"
+
+
+def server_package_name(version: str = VERSION) -> str:
+    # Windows 服务端也是便携形态：一个 exe，没有安装程序，删目录即卸载。
+    return f"{APP_NAME}_windows_server_portable_{version}"
+
+
+def portable_package_name(version: str = VERSION) -> str:
+    return f"{APP_NAME}_windows_client_portable_{version}"
+
+
+def macos_package_name(version: str = VERSION) -> str:
+    return f"{APP_NAME}_macos_client_{version}"
+
 
 SERVER_README = """\
 PAVL 服务端
@@ -86,6 +121,12 @@ PAVL 服务端
 选完目录立即生效，不需要重启服务端。目录下如果没有任何视频或音频，
 浏览列表里会自动隐藏，免得混进 MathType、驱动包这类无关文件夹。
 需要看到完整文件树时，把配置里的 hideEmptyDirs 改成 false。
+
+多个共享目录的显示顺序
+----------------------
+按名称排，规则与客户端列表一致：数字按数值、字母不分大小写、
+汉字按拼音。想固定顺序就在目录名前面加序号，比如「01 电影」「02 剧集」。
+根目录一律显示，即使里面暂时还没有视频，会显示成「0 项」。
 
 查看地址与 PIN
 --------------
@@ -128,11 +169,20 @@ PAVL 服务端
 卸载
 ----
 没有安装过程，删掉整个文件夹即可。配置在 %APPDATA%\\PAVL，需要一起删。
+
+客户端
+------
+本包只有服务端。播放需要另外下载对应平台的客户端包，
+在同一个发布页面里。
 """
 
 CLIENT_README = """\
-PAVL 客户端
-===========
+PAVL 客户端（Windows 便携版）
+=============================
+
+便携版：不用安装，解压后双击 pavl_client.exe 就能用。
+配对信息、日志与临时文件都放在程序同级的 PAVL-data 文件夹里，
+整个文件夹拷走就能带着配对状态与现场。
 
 1. 双击 pavl_client.exe。
 2. 启动时会自动在局域网里搜索 PAVL 服务端，找到的会直接列出来。
@@ -140,6 +190,13 @@ PAVL 客户端
 3. 第一次连接需要输入 PIN，就是服务端托盘菜单里显示的那 6 位数字。
    填好后点「连接」直接进入目录列表。
 4. 配对一次即可，之后打开就自动进上次的服务器。
+
+三个页面
+--------
+- 浏览：按共享目录逐层展开，知道片子在哪个文件夹时最快。
+- 片库：把所有共享目录的视频拉平成一张表，按标题排、可以搜关键词、
+  往下滚自动加载更多，顶部是最近播放。记不住放在哪时用这个。
+- 播放：点任意一部片进入。
 
 播放相关
 --------
@@ -149,6 +206,12 @@ PAVL 客户端
   - 开：跟随服务器上最近一次的播放位置（可能来自其他设备）。
 - 底部可以调倍速 0.5x–2.0x、切换音轨、切换字幕。
   每部片选过的音轨与字幕会被记住，下次打开自动恢复。
+- 播放期间会阻止屏幕自动熄灭，暂停或退出时释放。
+
+列表顺序
+--------
+一律由服务端决定：文件夹在前，数字按数值（第2集在第10集之前），
+字母不分大小写，汉字按拼音。客户端不再排一遍，多台设备看到的顺序一致。
 
 放不出来怎么办
 --------------
@@ -159,11 +222,15 @@ PAVL 客户端
 
 数据位置
 --------
-配对信息、播放日志与临时文件都放在本程序同级的 PAVL-data 文件夹里，
-整个文件夹拷走就能带着配对状态与现场。删除该文件夹等于恢复出厂设置。
-
     PAVL-data\\client.json    连接信息
     PAVL-data\\client.log     播放日志（播放过才会生成）
+
+删除该文件夹等于恢复出厂设置。
+
+Windows 安全提示
+----------------
+本程序没有购买代码签名证书，首次运行时 Windows SmartScreen 可能提示
+「Windows 已保护你的电脑」。点「更多信息」→「仍要运行」即可。
 """
 
 ROOT_README = """\
@@ -172,12 +239,15 @@ PAVL — Play All Videos in Lan
 
 局域网内跨设备播放服务器上视频的自建方案。
 
-    server/   Windows 服务端，双击常驻通知区域
-    client/   Windows 客户端，自带 libmpv 解码
+服务端与客户端分开发布，按需下载：
+
+    PAVL_windows_server_portable_<版本>     服务端，跑在放视频的那台机器上
+    PAVL_windows_client_portable_<版本>     Windows 客户端，免安装
+    PAVL_macos_client_<版本>                macOS 客户端
 
 快速开始
 --------
-1. 在存放视频的电脑上运行 server\\pavl.exe，
+1. 在存放视频的电脑上运行服务端的 pavl.exe，
    第一次按提示选一个媒体目录，或者用命令行指定：
 
        pavl.exe --root "D:\\Videos"
@@ -185,15 +255,15 @@ PAVL — Play All Videos in Lan
    以后想加目录或换目录，右键点通知区域里的图标即可，不用重启。
 
 2. 防火墙提示点「允许访问」。
-3. 在任意设备上运行 client\\pavl_client.exe。
+3. 在任意设备上运行客户端。
 4. 输入服务端托盘菜单里显示的 PIN。
 
-说明文档见 server\\README.txt 与 client\\README.txt。
+说明文档在各包内的 README.txt。
 
 技术要点
 --------
 服务端只做三件事：扫文件系统建索引、用 HTTP Range 发文件、存取进度。
-不解码、不转封装、不依赖 ffmpeg，所以只有 6MB 单文件、内存占用 25MB。
+不解码、不转封装、不依赖 ffmpeg，所以是 7.5MB 单文件、内存占用几十 MB。
 所有解码在客户端用 libmpv 完成，因此 MKV / HEVC / AV1 / ASS 字幕 / PGS 图形字幕
 全部支持，不需要任何转码。
 
@@ -201,7 +271,7 @@ PAVL — Play All Videos in Lan
 ----
 客户端内含 libmpv，按 LGPLv2.1+ 分发（GPL 组件已关闭）。
 客户端内含 MiSans 字体，按 Apache License 2.0 分发，
-许可证与声明见 client\\data\\flutter_assets\\assets\\fonts\\ 下的
+许可证与声明见客户端 data\\flutter_assets\\assets\\fonts\\ 下的
 MiSans-LICENSE.txt 与 NOTICE.txt。
 """
 
@@ -233,7 +303,11 @@ PAVL macOS 客户端
 启动后会自动在局域网里搜索服务端，找到的直接列出来；
 也可以手动填地址与端口。第一次连接需要输入服务端的 6 位 PIN。
 
+三个页面：浏览按共享目录逐层展开；片库把所有视频拉平成一张表，
+可搜索、滚动加载、顶部是最近播放；点任意一部进入播放。
+
 键盘：空格播放/暂停，左右键 ±10 秒，上下键 ±5 音量，F 全屏，Esc 返回。
+播放期间会阻止屏幕自动熄灭，暂停或退出时释放。
 
 数据位置
 --------
@@ -244,14 +318,23 @@ PAVL macOS 客户端
 
 服务端
 ------
-PAVL 服务端只提供 Windows 版本，需要在 Windows 或 Linux 机器上运行，
-macOS 客户端通过局域网连接它。
+PAVL 服务端只提供 Windows 版本（同一下载页面里的 _server 包），
+需要在 Windows 或 Linux 机器上运行，macOS 客户端通过局域网连接它。
 """
 
 
 def _require(path: Path, what: str) -> None:
     if not path.exists():
         sys.exit(f"缺少{what}：{path}\n请先构建。")
+
+
+def _prepare(out_root: Path, name: str) -> Path:
+    """建一个空的目标目录，同名旧目录先删掉。"""
+    target = out_root / name
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+    return target
 
 
 def _zip_dir(out_root: Path, target: Path) -> Path:
@@ -306,45 +389,43 @@ def _report(target: Path) -> None:
     print(f"总大小  : {total / 1024 / 1024:.1f} MB")
 
 
-def package_windows(out_root: Path, name: str) -> Path:
+def package_server(out_root: Path, name: str) -> Path:
+    """服务端包：只有一个 exe 和说明，不带客户端。"""
     _require(SERVER_EXE, "服务端 exe")
+
+    target = _prepare(out_root, name)
+    shutil.copy2(SERVER_EXE, target / "pavl.exe")
+    (target / "README.txt").write_text(SERVER_README, encoding="utf-8")
+    return target
+
+
+def package_portable(out_root: Path, name: str) -> Path:
+    """Windows 客户端便携版：exe + 运行时目录，免安装。"""
     _require(CLIENT_DIR / "pavl_client.exe", "客户端 exe")
 
-    target = out_root / name
-    if target.exists():
-        shutil.rmtree(target)
-
-    server_dir = target / "server"
-    client_dir = target / "client"
-    server_dir.mkdir(parents=True)
-    client_dir.mkdir(parents=True)
-
-    shutil.copy2(SERVER_EXE, server_dir / "pavl.exe")
-    (server_dir / "README.txt").write_text(SERVER_README, encoding="utf-8")
+    target = _prepare(out_root, name)
 
     # 排除本机运行时产生的数据：PAVL-data 里有配对令牌与日志，绝不能进发布包。
-    skip = {"PAVL-data"}
+    # nohup.out 是早期用 nohup 起客户端时留在 Release 目录里的输出文件，
+    # 不是构建产物，同样不该进包。
+    skip = {"PAVL-data", "nohup.out"}
     for item in CLIENT_DIR.iterdir():
         if item.name in skip or item.name.endswith(".log"):
             continue
-        dest = client_dir / item.name
+        dest = target / item.name
         if item.is_dir():
             shutil.copytree(item, dest)
         else:
             shutil.copy2(item, dest)
-    (client_dir / "README.txt").write_text(CLIENT_README, encoding="utf-8")
-
-    (target / "README.txt").write_text(ROOT_README, encoding="utf-8")
+    (target / "README.txt").write_text(CLIENT_README, encoding="utf-8")
     return target
 
 
 def package_macos(out_root: Path, name: str) -> Path:
+    """macOS 客户端：只有一个 .app 与说明，不带服务端。"""
     _require(MACOS_APP, "macOS 应用包（在 macOS 上执行 flutter build macos --release）")
 
-    target = out_root / name
-    if target.exists():
-        shutil.rmtree(target)
-    target.mkdir(parents=True)
+    target = _prepare(out_root, name)
 
     # symlinks=True 必须带：Flutter.framework 内部是用符号链接组织的版本目录，
     # 解引用会把包撑大好几倍，还会破坏框架结构。
@@ -357,27 +438,48 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="打包 PAVL 分发目录")
     parser.add_argument("--out", default=str(ROOT / "dist"), help="输出根目录")
     parser.add_argument("--zip", action="store_true", help="额外生成 zip")
+    parser.add_argument("--server", action="store_true", help="只打服务端包")
+    parser.add_argument("--portable", action="store_true", help="只打 Windows 客户端便携版")
+    parser.add_argument("--macos", action="store_true", help="只打 macOS 客户端包")
     parser.add_argument(
-        "--macos", action="store_true", help="打 macOS 客户端包（不带服务端）"
+        "--all",
+        action="store_true",
+        help="打当前平台上能打的全套（Windows 出服务端 + 便携版，macOS 出客户端）",
     )
-    parser.add_argument("--name", default=None, help="目录名")
+    parser.add_argument("--name", default=None, help="强制指定目录名（只对单个包生效）")
     args = parser.parse_args()
+
+    wanted_server = args.server or args.all
+    wanted_portable = args.portable or args.all
+    wanted_macos = args.macos or args.all
+    if not (wanted_server or wanted_portable or wanted_macos):
+        parser.error("至少要指定 --server / --portable / --macos / --all 之一")
+
+    if args.name and sum([wanted_server, wanted_portable, wanted_macos]) > 1:
+        parser.error("--name 只能和单个包一起用")
 
     out_root = Path(args.out)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    if args.macos:
-        name = args.name or f"PAVL-{VERSION}-macos"
-        target = package_macos(out_root, name)
+    built: list[tuple[Path, bool]] = []
+    if wanted_server:
+        name = args.name or server_package_name()
+        built.append((package_server(out_root, name), False))
+    if wanted_portable:
+        name = args.name or portable_package_name()
+        built.append((package_portable(out_root, name), False))
+    if wanted_macos:
+        name = args.name or macos_package_name()
+        built.append((package_macos(out_root, name), True))
+
+    for target, need_ditto in built:
+        print()
         _report(target)
         if args.zip:
-            _zip_app_bundle(out_root, target, name)
-        return 0
-
-    target = package_windows(out_root, args.name or f"PAVL-{VERSION}")
-    _report(target)
-    if args.zip:
-        _zip_dir(out_root, target)
+            if need_ditto:
+                _zip_app_bundle(out_root, target, target.name)
+            else:
+                _zip_dir(out_root, target)
     return 0
 
 

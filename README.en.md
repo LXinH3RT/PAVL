@@ -38,7 +38,8 @@ Which formats play is a property of the client, not of the server.
 | **Discovery** | UDP broadcast discovery on the LAN; remembers the last address and connects directly first; manual IP entry as a fallback |
 | **Pairing** | One-time 6-digit PIN, exchanged for a 32-byte token; later connections are automatic. Paired devices can be reviewed and revoked from the server |
 | **Browsing** | Drill down folder by folder with item counts and file sizes; breadcrumbs jump back to any level; folders with no media are hidden |
-| **Sorting** | Name / natural order (`Episode 2` before `Episode 10`) / size / modified time |
+| **Sorting** | Sorted on the server: folders first, numbers by value (`Episode 2` before `Episode 10`), letters case-insensitive, Chinese characters by pinyin. Size and modified time are also available |
+| **Library** | Every video pulled into one flat list, ordered by title, searchable by keyword, paged as you scroll, with recently played on top |
 | **Playback** | Play-pause, ±10 s, scrubbing, 0.5x–2.0x speed, volume, fullscreen; the display is kept awake while playing and released on pause or exit |
 | **Track selection** | Audio and subtitle tracks listed separately; the choice is remembered per file and restored on reopen |
 | **Subtitles** | Embedded tracks plus sidecar files in the same folder, matched by base name and episode number first and by similarity as a fallback; ASS styling renders as authored |
@@ -89,7 +90,8 @@ Keyboard controls while playing: `Space` play/pause, `←` `→` seek back/forwa
 ## How it works
 
 The server depends only on the Dart standard library (`dart:io` / `dart:convert` / `dart:async` /
-`dart:math`) and compiles to a single executable of about 6 MB. It does three things:
+`dart:math`), plus `lpinyin` for collation, and compiles to a single executable of about 7.5 MB. It
+does three things:
 
 * scans the configured media roots and builds a browsable tree plus a library index (results are
   cached and invalidated when the disk changes);
@@ -121,7 +123,8 @@ PAVL/
 │  ├─ bin/pavl.dart            Command-line entry point
 │  └─ lib/
 │     ├─ config.dart           Config storage, media roots
-│     ├─ media.dart            Extension kinds, filename parsing, natural order
+│     ├─ media.dart            Extension kinds, filename parsing
+│     ├─ sort_key.dart         The single collation rule (pinyin, numbers, case)
 │     ├─ library.dart          Directory tree, library index, cache, progress, metadata
 │     ├─ auth.dart             PIN pairing, tokens, device management
 │     ├─ discovery.dart        UDP broadcast discovery
@@ -183,16 +186,36 @@ writes the old values back and the build fails.
 
 **Packaging**
 
+The server and the clients ship as separate packages.
+
 ```
-python scripts/package.py --zip           # Windows: server + client
-python scripts/package.py --macos --zip   # macOS: the client app only
+python scripts/package.py --server --zip     # server
+python scripts/package.py --portable --zip   # Windows client (portable)
+python scripts/package.py --macos --zip      # macOS client
+python scripts/package.py --all --zip        # everything buildable on this host
 ```
 
-The Windows build lands in `dist/PAVL-<version>/`: `server/` and `client/` each carry a short readme,
-and the root has an overview. The macOS build lands in `dist/PAVL-<version>-macos/` and contains only
-`PAVL.app` plus installation notes — there is no macOS server. The `.app` archive has to be produced by
-`ditto` on macOS; a plain zip loses the symlinks and executable bits and will not launch after
-extraction.
+Package naming rule:
+
+```
+<app>_<platform>_<client|server>[_portable]_<version>
+```
+
+* The `portable` segment appears only for portable builds and is omitted for installers. Both the
+  Windows server and the Windows client are portable here (unzip and run, delete the folder to
+  uninstall), so both carry it; the macOS build is a `.app` you drag into Applications, so it does not.
+* Platform is one of `windows`, `macos`, `linux`.
+
+The three packages currently produced:
+
+| Package | Contents |
+| --- | --- |
+| `PAVL_windows_server_portable_<version>` | `pavl.exe` and a short readme |
+| `PAVL_windows_client_portable_<version>` | `pavl_client.exe`, runtime DLLs and `data/` |
+| `PAVL_macos_client_<version>` | `PAVL.app` and installation notes |
+
+The `.app` archive has to be produced by `ditto` on macOS; a plain zip loses the symlinks and
+executable bits and will not launch after extraction.
 
 ## Conventions
 
@@ -226,8 +249,6 @@ icon and the native dialogs.
   asking; if a manual broadcast then finds no server, the client points the user to
   System Settings → Privacy & Security → Local Network.
 * Poster and synopsis support is exposed by the API but not surfaced in the UI.
-* The aggregated library view (recently played, filter by kind) is served by the API but not yet used
-  by the client.
 
 ## License
 

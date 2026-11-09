@@ -11,6 +11,7 @@ import 'dart:io';
 
 import 'config.dart';
 import 'media.dart';
+import 'sort_key.dart';
 import 'subtitle_match.dart';
 
 /// 一个媒体条目的静态信息。
@@ -316,7 +317,7 @@ class Library {
           childCount: probes[i].childCount,
         ));
       }
-      list.sort((a, b) => naturalCompare(a.name, b.name));
+      list.sort((a, b) => compareNames(a.name, b.name));
       return list;
     }
 
@@ -449,7 +450,7 @@ class Library {
         kind: v.kind,
         subtitles: subs == null
             ? const []
-            : (subs..sort((a, b) => naturalCompare(a.name, b.name))),
+            : (subs..sort((a, b) => compareNames(a.name, b.name))),
       ));
     }
     // 实在归不了的字幕单独保留，避免文件列表与文件系统不一致。
@@ -635,15 +636,20 @@ class Library {
           if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
           return b.modifiedMs.compareTo(a.modifiedMs);
         });
-      case 'natural':
+      case 'name':
+        // 显式要字典序时才走这条，避免把 `第10集` 排到 `第2集` 前面——
+        // 那个结果是按字符串逐位比出来的，用户看到的顺序就成了乱的。
         copy.sort((a, b) {
           if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
-          return naturalCompare(a.name, b.name);
+          return compareNames(a.name, b.name);
         });
       default:
+        // 默认排序：目录在前，其余按名称的自然序（数字按数值、汉字按拼音）。
+        // 曾经的 default 是纯小写字典序，与根列表用的自然序不一致，同一批
+        // 名称在不同层级会排出不同顺序。
         copy.sort((a, b) {
           if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
-          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          return compareNames(a.name, b.name);
         });
     }
     return copy;
@@ -693,7 +699,7 @@ class Library {
           continue;
         }
       }
-      result.sort((a, b) => naturalCompare(a.relativePath, b.relativePath));
+      result.sort((a, b) => compareNames(a.relativePath, b.relativePath));
       _allMedia = result;
       _allMediaAt = DateTime.now();
       onProgress?.call(result.length);

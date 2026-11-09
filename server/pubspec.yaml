@@ -1,10 +1,19 @@
 name: pavl_server
 description: PAVL - LAN media library and streaming server.
-version: 0.2.0
+version: 0.2.1
 publish_to: 'none'
 
 environment:
   sdk: ^3.6.0
+
+dependencies:
+  # 汉字转拼音，只为排序服务。
+  #
+  # 服务端其余部分刻意零依赖，这里破例是因为排序规则必须只有一份：多台
+  # 设备看到的顺序要一致，而客户端里排只能排当前页，翻页后就乱套了。字典
+  # 是 const 字符串，编进 exe 里，运行时不需要任何外部文件。
+  # 许可证：BSD 2-Clause。
+  lpinyin: ^2.0.3
 
 executables:
   pavl: pavl

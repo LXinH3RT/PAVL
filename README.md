@@ -33,7 +33,8 @@ PAVL 把这件事拆成两半：
 | **发现** | 局域网 UDP 广播自动发现服务端；记住上次的地址优先直连；也可以手填 IP |
 | **配对** | 6 位 PIN 一次性配对，换 32 字节令牌，之后自动登录；服务端可查看并吊销已配对设备 |
 | **浏览** | 按目录逐层浏览，显示条目数与文件大小；面包屑可回跳任意一级；没有媒体文件的目录自动隐藏 |
-| **排序** | 文件名 / 自然排序（`第2集` 排在 `第10集` 前面）/ 大小 / 修改时间 |
+| **排序** | 由服务端统一排序：文件夹在前、数字按数值（`第2集` 在 `第10集` 前）、字母不分大小写、汉字按拼音。也可按大小、修改时间排 |
+| **片库** | 跨目录拉平成一张表，按标题排、按关键词搜索、滚动到底自动加载下一页，顶部带最近播放 |
 | **播放** | 播放暂停、±10 秒、进度拖拽、0.5x–2.0x 变速、音量、全屏；播放期间阻止系统休眠与熄屏，暂停或退出即释放 |
 | **选轨** | 音轨与字幕轨各自列出切换，按文件记住选择，下次打开自动恢复 |
 | **字幕** | 内嵌轨与同目录外挂字幕自动匹配，主干名 + 集数优先后按相似度兜底；ASS 富文本样式照常渲染 |
@@ -107,7 +108,8 @@ PAVL/
 │  ├─ bin/pavl.dart            命令行入口
 │  └─ lib/
 │     ├─ config.dart           配置读写、媒体根目录
-│     ├─ media.dart            扩展名识别、文件名解析、自然排序
+│     ├─ media.dart            扩展名识别、文件名解析
+│     ├─ sort_key.dart         全项目唯一的排序规则（拼音、数字、大小写）
 │     ├─ library.dart          目录树、全库索引、缓存、进度与元数据
 │     ├─ auth.dart             PIN 配对、令牌、设备管理
 │     ├─ discovery.dart        UDP 广播发现
@@ -121,8 +123,8 @@ PAVL/
 │  ├─ lib/api/                 HTTP 客户端与局域网发现
 │  ├─ lib/store/               本地配置与数据目录
 │  ├─ lib/player/              播放控制封装
-│  ├─ lib/ui/                  连接、浏览、播放、设置、配对
-│  ├─ lib/util/                日志、自然排序、平台差异
+│  ├─ lib/ui/                  连接、浏览、片库、播放、设置、配对
+│  ├─ lib/util/                日志、平台差异
 │  ├─ assets/fonts/            界面字体与许可
 │  ├─ windows/                 Windows 平台工程
 │  └─ macos/                   macOS 平台工程
@@ -167,13 +169,34 @@ podspec 仍写着 10.9，`macos/Podfile` 里的 `post_install` 会逐 target 覆
 
 **打包**
 
+服务端与客户端分开发布，按需下载。
+
 ```
-python scripts/package.py --zip           # Windows：服务端 + 客户端
-python scripts/package.py --macos --zip   # macOS：仅客户端 PAVL.app
+python scripts/package.py --server --zip     # 服务端
+python scripts/package.py --portable --zip   # Windows 客户端（便携版）
+python scripts/package.py --macos --zip      # macOS 客户端
+python scripts/package.py --all --zip        # 当前平台上能打的全打
 ```
 
-Windows 产物在 `dist/PAVL-<版本>/`：`server/` 与 `client/` 各带一份运行说明，根目录有一份总说明。
-macOS 产物在 `dist/PAVL-<版本>-macos/`，里面只有 `PAVL.app` 与安装说明，不带服务端。
+产物命名规则：
+
+```
+软件名_平台名_客户端/服务端_便携版_版本号
+```
+
+* 便携版这一段只在便携形态上出现，安装版省略。Windows 的服务端与客户端都是便携形态
+  （解压即用、删目录即卸载），所以两者都带 `portable`；macOS 是一个拖进「应用程序」的
+  `.app`，不带。
+* 平台名取 `windows` / `macos` / `linux`。
+
+当前三个包：
+
+| 包名 | 内容 |
+| --- | --- |
+| `PAVL_windows_server_portable_<版本>` | `pavl.exe` 与运行说明 |
+| `PAVL_windows_client_portable_<版本>` | `pavl_client.exe`、运行时 DLL 与 `data/` |
+| `PAVL_macos_client_<版本>` | `PAVL.app` 与安装说明 |
+
 `.app` 的压缩必须在 macOS 上用 `ditto` 完成，普通 zip 会丢掉符号链接与可执行权限，解压后起不来。
 
 ## 开发约定
@@ -204,7 +227,6 @@ macOS 产物在 `dist/PAVL-<版本>-macos/`，里面只有 `PAVL.app` 与安装�
 * macOS 客户端首次运行需要同意「本地网络」权限。误点拒绝后系统不再询问，此时客户端手动广播一轮
   若一台服务器都没应答，会提示去「系统设置 → 隐私与安全性 → 本地网络」检查。
 * 文件夹刮削（海报、简介）的接口已预留，界面未做。
-* 片库聚合视图（按最近播放、类型筛选）的接口已就绪，客户端未接入。
 
 ## 许可
 
