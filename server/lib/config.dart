@@ -1,11 +1,160 @@
 /// PAVL 服务端配置。
 ///
-/// 存储位置：%APPDATA%\PAVL\config.json（Windows）或 ~/.config/pavl/config.json。
 /// 端口、根目录、PIN 等全部走这一个文件，便于用户手工编辑。
+///
+/// 数据目录分两种形态，见 [StorageMode]：
+///   - 便携版：`<程序目录>/PAVL-data/config.json`，整个文件夹拷走即搬家；
+///   - 安装版：`%APPDATA%/PAVL/config.json`（Windows）或
+///     `~/.config/pavl/config.json`。
 library;
 
 import 'dart:convert';
 import 'dart:io';
+
+/// 便携版数据目录名，与客户端保持一致。
+const String portableDirName = 'PAVL-data';
+
+/// 服务端数据的存放形态。
+///
+/// 判定的是「程序目录能不能写」，而不是「有没有安装程序」：本项目的服务端
+/// 从来只有一个 exe，所谓安装版只是被放到了 Program Files 这类只读位置。
+enum StorageMode {
+  /// 程序目录可写：数据跟着程序走，删目录即卸载。
+  portable('portable'),
+
+  /// 程序目录不可写：数据放系统的用户配置目录。
+  installed('installed');
+
+  const StorageMode(this.wireName);
+
+  /// 出现在 `/api/v1/info` 里的字面量。
+  ///
+  /// 客户端据此决定「播放偏好存客户端还是存服务端」，所以这两个值是对外
+  /// 契约的一部分，不能随意改动。
+  final String wireName;
+}
+
+/// 解析出来的数据目录及其形态。
+class ConfigLocation {
+  const ConfigLocation(this.dir, this.mode);
+
+  final Directory dir;
+  final StorageMode mode;
+}
+
+ConfigLocation? _resolvedLocation;
+
+/// 当前进程的数据存放形态。
+StorageMode get storageMode => resolveLocation().mode;
+
+/// 解析数据目录与形态，结果进程内缓存。
+///
+/// 顺序：`PAVL_DATA_DIR` 环境变量 → 程序目录旁的 `PAVL-data/`（可写则用）
+/// → 用户配置目录。
+///
+/// 开发时用 `dart run bin/pavl.dart` 启动，`resolvedExecutable` 指向 Dart SDK
+/// 里的 dart.exe，旁边当然可写——但那是 SDK 自己的 bin 目录，配置写进去既
+/// 污染 SDK，换台机器也找不到。所以由解释器启动的进程一律按安装版处理。
+ConfigLocation resolveLocation() {
+  final cached = _resolvedLocation;
+  if (cached != null) return cached;
+  final resolved = _resolveLocationUncached();
+  _resolvedLocation = resolved;
+  return resolved;
+}
+
+ConfigLocation _resolveLocationUncached() {
+  final override = Platform.environment['PAVL_DATA_DIR'];
+  if (override != null && override.isNotEmpty) {
+    final dir = Directory(override);
+    if (_ensureWritable(dir)) {
+      return ConfigLocation(dir, StorageMode.portable);
+    }
+  }
+
+  if (!_launchedByInterpreter()) {
+    final exeDir = File(Platform.resolvedExecutable).parent;
+    final portable =
+        Directory('${exeDir.path}${Platform.pathSeparator}$portableDirName');
+    if (_ensureWritable(portable)) {
+      _migrateLegacyData(portable);
+      return ConfigLocation(portable, StorageMode.portable);
+    }
+  }
+
+  return ConfigLocation(legacyConfigDir(), StorageMode.installed);
+}
+
+/// 安装版的用户配置目录：`%APPDATA%/PAVL`、`$XDG_CONFIG_HOME/pavl` 等。
+Directory legacyConfigDir() {
+  final appData = Platform.environment['APPDATA'];
+  if (Platform.isWindows && appData != null && appData.isNotEmpty) {
+    return Directory('$appData${Platform.pathSeparator}PAVL');
+  }
+  final xdg = Platform.environment['XDG_CONFIG_HOME'];
+  if (xdg != null && xdg.isNotEmpty) {
+    return Directory('$xdg${Platform.pathSeparator}pavl');
+  }
+  final home = Platform.environment['HOME'] ??
+      Platform.environment['USERPROFILE'] ??
+      Directory.current.path;
+  return Directory(
+      '$home${Platform.pathSeparator}.config${Platform.pathSeparator}pavl');
+}
+
+/// 老版本放在用户配置目录里的那几个文件。
+const List<String> _migratedFiles = [
+  'config.json',
+  'devices.json',
+  'progress.json',
+  'prefs.json',
+  'meta.json',
+];
+
+/// 首次以便携形态启动时，把用户配置目录里的数据搬过来。
+///
+/// 只搬目标不存在的文件，所以重复启动不会覆盖已经在用的便携数据；旧文件
+/// 保留不删，用户退回旧版本时配对状态与进度还在。
+void _migrateLegacyData(Directory target) {
+  try {
+    final legacy = legacyConfigDir();
+    if (!legacy.existsSync()) return;
+    for (final name in _migratedFiles) {
+      final source = File('${legacy.path}${Platform.pathSeparator}$name');
+      final dest = File('${target.path}${Platform.pathSeparator}$name');
+      if (!source.existsSync() || dest.existsSync()) continue;
+      source.copySync(dest.path);
+    }
+  } on FileSystemException {
+    // 迁移失败就当没有旧数据，用默认配置起步。
+  }
+}
+
+/// 进程是不是由 Dart 解释器拉起（开发调试）。
+bool _launchedByInterpreter() {
+  final name = Platform.resolvedExecutable
+      .replaceAll(r'\', '/')
+      .split('/')
+      .last
+      .toLowerCase();
+  return name == 'dart' ||
+      name == 'dart.exe' ||
+      name == 'dartaotruntime' ||
+      name == 'dartaotruntime.exe';
+}
+
+/// 建目录并写一个探针文件，确认真的能写。
+bool _ensureWritable(Directory dir) {
+  try {
+    dir.createSync(recursive: true);
+    final probe = File('${dir.path}${Platform.pathSeparator}.writable');
+    probe.writeAsStringSync('');
+    probe.deleteSync();
+    return true;
+  } on FileSystemException {
+    return false;
+  }
+}
 
 /// 一个媒体根目录。
 class RootDir {
@@ -137,22 +286,11 @@ class ConfigStore {
 
   final File file;
 
-  /// 解析配置目录。优先 %APPDATA%，其次 XDG，最后 home。
-  static Directory resolveConfigDir() {
-    final appData = Platform.environment['APPDATA'];
-    if (Platform.isWindows && appData != null && appData.isNotEmpty) {
-      return Directory('$appData${Platform.pathSeparator}PAVL');
-    }
-    final xdg = Platform.environment['XDG_CONFIG_HOME'];
-    if (xdg != null && xdg.isNotEmpty) {
-      return Directory('$xdg${Platform.pathSeparator}pavl');
-    }
-    final home = Platform.environment['HOME'] ??
-        Platform.environment['USERPROFILE'] ??
-        Directory.current.path;
-    return Directory('$home${Platform.pathSeparator}.config'
-        '${Platform.pathSeparator}pavl');
-  }
+  /// 数据目录：便携版在程序目录旁，安装版在用户配置目录。
+  ///
+  /// 所有按文件名落盘的存储（配置、设备、进度、偏好、元数据）都从这里取
+  /// 目录，所以形态判定只需要做一次。
+  static Directory resolveConfigDir() => resolveLocation().dir;
 
   static ConfigStore defaultStore() => ConfigStore(
       File('${resolveConfigDir().path}${Platform.pathSeparator}config.json'));

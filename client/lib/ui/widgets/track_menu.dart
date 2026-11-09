@@ -43,6 +43,9 @@ class _TrackMenuDialogState extends State<TrackMenuDialog> {
     // libmpv 会清空轨道列表，控制器保留了一份快照。
     _tracks = widget.controller.tracks;
     _current = player.state.track;
+    // state.track 只记录「被显式设置过的那条」，刚打开片子时两侧都是 auto，
+    // 于是这里一个勾都不亮。先按 state 画一帧，再问一次 libmpv 补上真实值。
+    unawaited(_resolveCurrent());
     _tracksSub = player.stream.tracks.listen((tracks) {
       if (!mounted) return;
       // 播放结束时的空列表不覆盖界面上的快照，否则对话框会突然变空。
@@ -52,6 +55,21 @@ class _TrackMenuDialogState extends State<TrackMenuDialog> {
     _trackSub = player.stream.track.listen((track) {
       if (!mounted) return;
       setState(() => _current = track);
+    });
+  }
+
+  /// 向播放器问一次当前真正在用的轨道。
+  ///
+  /// 这是个异步补读，结果回来时用户可能已经点了别的轨，所以只补「还停在
+  /// auto」的那一侧，别把界面上的新选择又盖回去。
+  Future<void> _resolveCurrent() async {
+    final track = await widget.controller.resolveCurrentTrack();
+    if (!mounted) return;
+    setState(() {
+      _current = _current.copyWith(
+        audio: _current.audio.id == 'auto' ? track.audio : null,
+        subtitle: _current.subtitle.id == 'auto' ? track.subtitle : null,
+      );
     });
   }
 

@@ -9,6 +9,10 @@ import 'dart:io';
 
 import '../api/pavl_client.dart';
 
+// 偏好的进出都要经过协议层和服务端，模型统一放在那里。这里再导出一次，
+// 免得所有用到 [TrackPreference] 的界面文件都要多写一行 import。
+export '../api/pavl_client.dart' show TrackPreference;
+
 /// 便携目录名：放在可执行文件旁边，整个文件夹拷走就能带着配对状态。
 ///
 /// 不能叫 `data`：Flutter 自己的资源目录就叫 `data`（app.so、flutter_assets
@@ -109,32 +113,6 @@ bool _ensureWritable(Directory dir) {
   }
 }
 
-/// 一部片的音轨字幕偏好。
-class TrackPreference {
-  TrackPreference({this.audioId, this.subtitleId, this.subtitlePath});
-
-  /// 音轨 id，null 表示跟随文件默认。
-  final String? audioId;
-
-  /// 内嵌字幕轨 id，'no' 表示关闭。
-  final String? subtitleId;
-
-  /// 外挂字幕的服务器路径，优先于 [subtitleId]。
-  final String? subtitlePath;
-
-  Map<String, Object?> toJson() => {
-        if (audioId != null) 'audioId': audioId,
-        if (subtitleId != null) 'subtitleId': subtitleId,
-        if (subtitlePath != null) 'subtitlePath': subtitlePath,
-      };
-
-  static TrackPreference fromJson(Map<String, Object?> json) => TrackPreference(
-        audioId: json['audioId'] as String?,
-        subtitleId: json['subtitleId'] as String?,
-        subtitlePath: json['subtitlePath'] as String?,
-      );
-}
-
 /// 应用配置。
 class AppStore {
   AppStore._(this._file);
@@ -152,7 +130,13 @@ class AppStore {
   String? lastServerId;
 
   /// 每部片的音轨字幕偏好，键是服务器 id + 片路径。
+  ///
+  /// 便携版服务端只存在这里；安装版还会同步到服务端，本地这一份作为读取
+  /// 失败时的兜底。详见 `player/track_prefs.dart`。
   Map<String, TrackPreference> trackPreferences = {};
+
+  /// 是否记住每部片的音轨与字幕选择。关掉后不再读写偏好。
+  bool rememberTracks = true;
 
   /// 进度模式：true 用服务端跨设备进度，false 只用本机记录。
   bool crossDeviceProgress = false;
@@ -205,6 +189,7 @@ class AppStore {
     deviceName = json['deviceName'] as String? ?? Platform.localHostname;
     lastServerId = json['lastServerId'] as String?;
     crossDeviceProgress = json['crossDeviceProgress'] as bool? ?? false;
+    rememberTracks = json['rememberTracks'] as bool? ?? true;
 
     final rawServers = json['servers'];
     if (rawServers is List) {
@@ -241,6 +226,7 @@ class AppStore {
       'deviceName': deviceName,
       if (lastServerId != null) 'lastServerId': lastServerId,
       'crossDeviceProgress': crossDeviceProgress,
+      'rememberTracks': rememberTracks,
       'servers': servers.map((e) => e.toJson()).toList(),
       'trackPreferences': trackPreferences.map(
         (key, value) => MapEntry(key, value.toJson()),
@@ -266,6 +252,26 @@ class AppStore {
 
   TrackPreference? trackPreference(String serverId, String path) =>
       trackPreferences[prefKey(serverId, path)];
+
+  /// 这台服务器上记住了多少部片。
+  int trackPreferenceCount(String serverId) {
+    final prefix = '$serverId::';
+    return trackPreferences.keys.where((k) => k.startsWith(prefix)).length;
+  }
+
+  /// 清掉这台服务器上的全部偏好，返回清掉的条数。
+  Future<int> clearTrackPreferences(String serverId) async {
+    final prefix = '$serverId::';
+    final keys = trackPreferences.keys
+        .where((k) => k.startsWith(prefix))
+        .toList(growable: false);
+    if (keys.isEmpty) return 0;
+    for (final key in keys) {
+      trackPreferences.remove(key);
+    }
+    await save();
+    return keys.length;
+  }
 
   /// 写入或更新一台服务器。
   Future<void> upsertServer(ServerConnection connection) async {

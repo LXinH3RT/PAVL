@@ -12,7 +12,7 @@ import '../util/app_log.dart';
 import 'pair_dialog.dart';
 import 'library_screen.dart';
 import 'player_screen.dart';
-import 'settings_dialog.dart';
+import 'settings_screen.dart';
 import 'widgets/entry_tile.dart';
 
 /// 浏览页。
@@ -48,7 +48,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   void initState() {
     super.initState();
     _connection = widget.connection;
-    _client = PavlClient(connection: _connection);
+    _client = _makeClient();
     unawaited(_load(''));
   }
 
@@ -142,15 +142,28 @@ class _BrowseScreenState extends State<BrowseScreen> {
     _connection = _connection.copyWith(token: result);
     await widget.store.upsertServer(_connection);
     _client.close();
-    _client = PavlClient(connection: _connection);
+    _client = _makeClient();
     await _load(_currentPath);
   }
 
-  /// 打开设置面板：进度模式与服务器信息。
+  /// 建客户端。
+  ///
+  /// 设备 id 一并给过去：服务端没设 PIN 时免鉴权，只能靠这个头认机器，
+  /// 否则「哪台机器对哪部片选了什么轨」无从区分。
+  PavlClient _makeClient() => PavlClient(
+        connection: _connection,
+        deviceId: widget.store.deviceId,
+      );
+
+  /// 打开设置页。
   Future<void> _showSettings() async {
-    await showDialog<void>(
-      context: context,
-      builder: (_) => SettingsDialog(store: widget.store, connection: _connection),
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SettingsScreen(
+          store: widget.store,
+          connection: _connection,
+        ),
+      ),
     );
     if (!mounted) return;
     setState(() {});

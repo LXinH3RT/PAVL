@@ -282,16 +282,39 @@ class _ConnectPanelState extends State<ConnectPanel> {
       setState(() => _error = '正在局域网里找服务器…');
       final found = await DiscoverySession().run();
       if (!mounted) return null;
-      if (found.isEmpty) {
-        setState(() => _error = _discoveryFailedHint);
+      if (found.length == 1) return found.first;
+      if (found.isNotEmpty) {
+        setState(() => _error = '找到 ${found.length} 台，请先点一台填好地址');
         return null;
       }
-      if (found.length == 1) return found.first;
-      setState(() => _error = '找到 ${found.length} 台，请先点一台填好地址');
+      // 广播没应答不等于连不上：设了固定地址的服务端不会出现在发现列表里，
+      // 换过网段的机器也可能收不到广播。已经配对过的那几台挨个探一遍，
+      // 通了就不用让用户翻出去查 IP。
+      final saved = await _probeSavedServers();
+      if (!mounted) return null;
+      if (saved.length == 1) return saved.first;
+      if (saved.isNotEmpty) {
+        setState(() => _error = '找到 ${saved.length} 台，请先点一台填好地址');
+        return null;
+      }
+      setState(() => _error = _discoveryFailedHint);
       return null;
     }
     setState(() => _error = '找到 ${widget.servers.length} 台，请先点一台填好地址');
     return null;
+  }
+
+  /// 挨个探一遍已经配对过的服务器，留下还连得上的。
+  ///
+  /// 地址可能已经变了（换了路由器、改成动态分配），所以以探通的真实结果
+  /// 为准，而不是直接信任本地存的那条记录。
+  Future<List<DiscoveredServer>> _probeSavedServers() async {
+    final results = <DiscoveredServer>[];
+    for (final saved in widget.savedServers) {
+      final probed = await probeHost(saved.host, saved.port);
+      if (probed != null) results.add(probed);
+    }
+    return results;
   }
 
   /// 广播一轮但一台都没应答时的提示。
@@ -332,7 +355,9 @@ class _ConnectPanelState extends State<ConnectPanel> {
           name: server.name,
           host: server.host,
           port: server.port,
+          storage: server.storage,
         ),
+        deviceId: widget.deviceId,
       );
       try {
         final token = await client.pair(
@@ -350,6 +375,7 @@ class _ConnectPanelState extends State<ConnectPanel> {
             host: server.host,
             port: server.port,
             token: token,
+            storage: server.storage,
           ),
         );
       } finally {

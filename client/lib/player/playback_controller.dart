@@ -17,6 +17,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../api/pavl_client.dart';
 import '../store/app_store.dart';
 import '../util/app_log.dart';
+import 'track_prefs.dart';
 
 /// 播放器封装。
 class PlaybackController {
@@ -24,13 +25,16 @@ class PlaybackController {
     required this.client,
     required this.store,
     required this.mediaDetail,
-  }) {
+  }) : prefs = TrackPrefs(client: client, store: store) {
     _init();
   }
 
   final PavlClient client;
   final AppStore store;
   final MediaDetail mediaDetail;
+
+  /// 音轨字幕偏好的读写入口。
+  final TrackPrefs prefs;
 
   late final Player _player = Player(
     configuration: const PlayerConfiguration(
@@ -346,39 +350,113 @@ class PlaybackController {
   }
 
   /// 恢复音轨与字幕选择。
+  ///
+  /// 按 id → 语言 → 标题的顺序匹配。只有 id 一个依据是不够的：同一部剧的
+  /// 下一集常常换了轨序，id 对不上，用户会觉得「上次选的国语怎么没记住」。
   Future<void> _restoreTrackPreference() async {
-    final pref = store.trackPreference(client.connection.serverId, mediaDetail.path);
-    if (pref == null) return;
+    if (!store.rememberTracks) return;
+    final pref = await prefs.get(mediaDetail.path);
+    if (pref == null || pref.isEmpty) return;
 
-    // 等 libmpv 把轨道扫出来，否则下面的按 id 匹配一定落空。
+    // 等 libmpv 把轨道扫出来，否则下面的匹配一定落空。
     final tracks = await _waitForTracks(const Duration(seconds: 6));
 
     // 音轨。
-    if (pref.audioId != null) {
-      for (final track in tracks.audio) {
-        if (track.id == pref.audioId) {
-          await _player.setAudioTrack(track);
-          break;
-        }
-      }
+    final audio = pickTrack<AudioTrack>(
+      tracks.audio.where((t) => !_isPseudoAudio(t)).toList(),
+      preferredId: pref.audioId,
+      preferredLang: pref.audioLang,
+      preferredTitle: pref.audioTitle,
+      idOf: (t) => t.id,
+      langOf: (t) => t.language,
+      titleOf: (t) => t.title,
+      isDefaultOf: (t) => t.isDefault,
+    );
+    if (audio != null && audio.id != _player.state.track.audio.id) {
+      await _player.setAudioTrack(audio);
     }
 
-    // 外挂字幕优先。
+    // 外挂字幕优先：用户主动挑的 srt/ass 比内嵌轨更贴近意图。
     if (pref.subtitlePath != null && pref.subtitlePath!.isNotEmpty) {
       await _loadExternalSubtitle(pref.subtitlePath!);
       return;
     }
-    if (pref.subtitleId != null) {
-      if (pref.subtitleId == 'no') {
-        await _player.setSubtitleTrack(SubtitleTrack.no());
-      } else {
-        for (final track in tracks.subtitle) {
-          if (track.id == pref.subtitleId) {
-            await _player.setSubtitleTrack(track);
+    if (pref.subtitleId == 'no') {
+      await _player.setSubtitleTrack(SubtitleTrack.no());
+      return;
+    }
+    if (pref.subtitleId != null ||
+        pref.subtitleLang != null ||
+        pref.subtitleTitle != null) {
+      final subtitle = pickTrack<SubtitleTrack>(
+        tracks.subtitle.where((t) => !_isPseudoSubtitle(t)).toList(),
+        preferredId: pref.subtitleId,
+        preferredLang: pref.subtitleLang,
+        preferredTitle: pref.subtitleTitle,
+        idOf: (t) => t.id,
+        langOf: (t) => t.language,
+        titleOf: (t) => t.title,
+        isDefaultOf: (t) => t.isDefault,
+      );
+      if (subtitle != null) {
+        await _player.setSubtitleTrack(subtitle);
+      }
+    }
+  }
+
+  /// 读出 libmpv 此刻真正在用的音轨与字幕。
+  ///
+  /// `Player.state.track` 记录的是「被显式设置过的那条」，不是「正在用的那
+  /// 条」：media_kit 只在 setAudioTrack / setSubtitleTrack 里写它，track-list
+  /// 扫描完成并不会回填。所以刚打开一部片、用户还没手动换过轨时，它一直是
+  /// 默认的 `auto`，轨道面板据此判断就会出现「一个勾都不亮」。
+  ///
+  /// 这里直接问 libmpv 的 `aid` / `sid` 属性——那就是当前选中的轨道 id，
+  /// `no` 表示关闭。只有还停在 `auto`（从未设置过）的那一侧才去问：用户手动
+  /// 选过之后 state.track 已经是对的，而且外挂字幕的 id 是 uri 形式，问回来
+  /// 反倒会把这个信息丢掉。
+  Future<Track> resolveCurrentTrack() async {
+    final current = _player.state.track;
+    final audioKnown = current.audio.id != 'auto';
+    final subtitleKnown = current.subtitle.id != 'auto';
+    if (audioKnown && subtitleKnown) return current;
+
+    final platform = _player.platform;
+    // 只有原生实现能读属性；拿不到就按 state 原样返回，不影响播放。
+    if (platform is! NativePlayer) return current;
+
+    try {
+      final aid = audioKnown ? '' : (await platform.getProperty('aid')).trim();
+      final sid =
+          subtitleKnown ? '' : (await platform.getProperty('sid')).trim();
+      final available = tracks;
+
+      AudioTrack? audio;
+      if (aid.isNotEmpty && aid != 'no' && aid != 'auto') {
+        for (final track in available.audio) {
+          if (track.id == aid) {
+            audio = track;
             break;
           }
         }
       }
+
+      SubtitleTrack? subtitle;
+      if (sid == 'no') {
+        subtitle = SubtitleTrack.no();
+      } else if (sid.isNotEmpty && sid != 'auto') {
+        for (final track in available.subtitle) {
+          if (track.id == sid) {
+            subtitle = track;
+            break;
+          }
+        }
+      }
+
+      return current.copyWith(audio: audio, subtitle: subtitle);
+    } on Object catch (error) {
+      logLine('player', '读取当前轨道失败：$error');
+      return current;
     }
   }
 
@@ -392,15 +470,19 @@ class PlaybackController {
 
   /// 切换字幕轨。
   ///
-  /// [track] 为 null 时关闭字幕。会记到本地偏好里，下次打开同一部片自动恢复。
+  /// [track] 为 null 时关闭字幕。会记进偏好，下次打开同一部片（以及同剧的
+  /// 下一集）自动恢复。
   Future<void> selectSubtitle(SubtitleTrack? track, {String? sidecarPath}) async {
     await _player.setSubtitleTrack(track ?? SubtitleTrack.no());
-    await store.setTrackPreference(
-      client.connection.serverId,
+    if (!store.rememberTracks) return;
+    // 音轨那条可能还停在 auto，用 [resolveCurrentTrack] 补成真实轨道，
+    // 否则这次写入会把「用户本来在用的音轨」记成空，下次打开就不还原了。
+    final current = await resolveCurrentTrack();
+    await prefs.put(
       mediaDetail.path,
-      TrackPreference(
-        audioId: _player.state.track.audio.id,
-        subtitleId: track?.id ?? 'no',
+      describeTracks(
+        audio: current.audio,
+        subtitle: track,
         subtitlePath: sidecarPath,
       ),
     );
@@ -409,15 +491,17 @@ class PlaybackController {
   /// 切换音轨。
   Future<void> selectAudio(AudioTrack track) async {
     await _player.setAudioTrack(track);
-    final existing =
-        store.trackPreference(client.connection.serverId, mediaDetail.path);
-    await store.setTrackPreference(
-      client.connection.serverId,
+    if (!store.rememberTracks) return;
+    final subtitle = (await resolveCurrentTrack()).subtitle;
+    // 当前挂的是外挂字幕时，id 是 uri 形式，不能当成内嵌轨记下来；外挂
+    // 字幕路径已经单独存在偏好里，这里把 subtitle 一并交给 describeTracks
+    // 反而会互相覆盖。
+    final isExternal = subtitle.uri;
+    await prefs.put(
       mediaDetail.path,
-      TrackPreference(
-        audioId: track.id,
-        subtitleId: existing?.subtitleId,
-        subtitlePath: existing?.subtitlePath,
+      describeTracks(
+        audio: track,
+        subtitle: isExternal ? null : subtitle,
       ),
     );
   }
@@ -590,6 +674,12 @@ bool _isPseudoTrack(VideoTrack t) =>
 
 bool _isPseudoAudio(AudioTrack t) =>
     t.id == 'auto' || t.id == 'no' || (t.codec == null && t.channelscount == null);
+
+/// 字幕轨的伪轨道判定。
+///
+/// 不能复用视频那条：字幕轨的 `w`/`channelscount` 本来就是空的，按「没有
+/// 可用信息」判会把真实字幕轨全误杀，所以这里只看 id。
+bool _isPseudoSubtitle(SubtitleTrack t) => t.id == 'auto' || t.id == 'no';
 
 VideoTrack? _firstRealVideo(List<VideoTrack> tracks) {
   for (final track in tracks) {

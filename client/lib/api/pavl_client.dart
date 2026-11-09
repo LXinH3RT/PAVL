@@ -43,6 +43,7 @@ class DiscoveredServer {
     required this.version,
     required this.serverId,
     required this.requiresPairing,
+    this.storage,
   });
 
   final String name;
@@ -51,6 +52,12 @@ class DiscoveredServer {
   final String version;
   final String serverId;
   final bool requiresPairing;
+
+  /// 服务端的存储形态：`portable` / `installed`。
+  ///
+  /// 老版本服务端没有这个字段，按便携处理——它们的数据确实都在用户配置
+  /// 目录里跟着程序走，与便携版行为一致。
+  final String? storage;
 
   String get baseUrl => 'http://$host:$port';
 
@@ -66,6 +73,7 @@ class ServerConnection {
     required this.host,
     required this.port,
     this.token,
+    this.storage,
   });
 
   final String serverId;
@@ -74,6 +82,12 @@ class ServerConnection {
   final int port;
   final String? token;
 
+  /// 服务端的存储形态，来自 `/info` 的 `storage` 字段。
+  ///
+  /// 只在「这台服务器是怎么部署的」这一件事上有意义：安装版把播放偏好存
+  /// 在服务端，便携版存客户端本地。旧服务端没有这个字段，按便携处理。
+  final String? storage;
+
   String get baseUrl => 'http://$host:$port';
 
   bool get paired => token != null && token!.isNotEmpty;
@@ -81,11 +95,18 @@ class ServerConnection {
   /// 界面用的说法，与 [paired] 同义。
   bool get hasToken => paired;
 
+  /// 服务端是不是安装版（数据放用户目录、可能服务多台机器）。
+  ///
+  /// 未知（老服务端）一律按便携处理：那种情况下把偏好传到服务端也不会
+  /// 被别的机器读到，因为旧服务端的 preference 表根本不存在。
+  bool get serverStoresPrefs => storage == 'installed';
+
   ServerConnection copyWith({
     String? name,
     String? host,
     int? port,
     String? token,
+    String? storage,
   }) =>
       ServerConnection(
         serverId: serverId,
@@ -93,6 +114,7 @@ class ServerConnection {
         host: host ?? this.host,
         port: port ?? this.port,
         token: token ?? this.token,
+        storage: storage ?? this.storage,
       );
 
   Map<String, Object?> toJson() => {
@@ -101,6 +123,7 @@ class ServerConnection {
         'host': host,
         'port': port,
         if (token != null) 'token': token,
+        if (storage != null) 'storage': storage,
       };
 
   static ServerConnection fromJson(Map<String, Object?> json) => ServerConnection(
@@ -109,6 +132,7 @@ class ServerConnection {
         host: json['host'] as String? ?? '',
         port: (json['port'] as num?)?.toInt() ?? 8765,
         token: json['token'] as String?,
+        storage: json['storage'] as String?,
       );
 }
 
@@ -272,6 +296,91 @@ class LibraryPage {
     pageSize: 60,
     hasMore: false,
   );
+}
+
+/// 一部片的音轨字幕偏好。
+///
+/// 除了轨道 id，还记下语言和标题：同一部剧的第二集，音轨 id 常常和第一集
+/// 对不上（容器里轨序变了、或者多了一条评论音轨），只按 id 匹配就会发现
+/// 「记住的选择没生效」。语言是更稳的线索，标题用来区分同语言的多条轨。
+///
+/// 键名两套：本地 `client.json` 用 `audioId`/`subtitleId`，服务端
+/// `prefs.json` 用 `audio`/`subtitle`。序列化方法分开，读的时候各走各的，
+/// 免得以后有人改了一边忘了另一边。
+class TrackPreference {
+  TrackPreference({
+    this.audioId,
+    this.subtitleId,
+    this.subtitlePath,
+    this.audioLang,
+    this.subtitleLang,
+    this.audioTitle,
+    this.subtitleTitle,
+  });
+
+  /// 音轨 id，null 表示跟随文件默认。
+  final String? audioId;
+
+  /// 内嵌字幕轨 id，'no' 表示关闭。
+  final String? subtitleId;
+
+  /// 外挂字幕的服务器路径，优先于 [subtitleId]。
+  final String? subtitlePath;
+
+  /// 选中音轨的语言标签（ISO 639 或播放器给的原文）。
+  final String? audioLang;
+
+  /// 选中字幕轨的语言标签。
+  final String? subtitleLang;
+
+  /// 选中音轨的标题，用来在同语言的多条轨之间区分。
+  final String? audioTitle;
+
+  /// 选中字幕轨的标题。
+  final String? subtitleTitle;
+
+  bool get isEmpty =>
+      audioId == null &&
+      subtitleId == null &&
+      subtitlePath == null &&
+      audioLang == null &&
+      audioTitle == null &&
+      subtitleLang == null &&
+      subtitleTitle == null;
+
+  /// 写本地 `client.json`。
+  Map<String, Object?> toJson() => {
+        if (audioId != null) 'audioId': audioId,
+        if (subtitleId != null) 'subtitleId': subtitleId,
+        if (subtitlePath != null) 'subtitlePath': subtitlePath,
+        if (audioLang != null) 'audioLang': audioLang,
+        if (audioTitle != null) 'audioTitle': audioTitle,
+        if (subtitleLang != null) 'subtitleLang': subtitleLang,
+        if (subtitleTitle != null) 'subtitleTitle': subtitleTitle,
+      };
+
+  /// 读本地 `client.json`。
+  static TrackPreference fromJson(Map<String, Object?> json) => TrackPreference(
+        audioId: json['audioId'] as String?,
+        subtitleId: json['subtitleId'] as String?,
+        subtitlePath: json['subtitlePath'] as String?,
+        audioLang: json['audioLang'] as String?,
+        audioTitle: json['audioTitle'] as String?,
+        subtitleLang: json['subtitleLang'] as String?,
+        subtitleTitle: json['subtitleTitle'] as String?,
+      );
+
+  /// 读服务端 `/api/v1/prefs/tracks` 返回的一条。
+  static TrackPreference fromServerJson(Map<Object?, Object?> json) =>
+      TrackPreference(
+        audioId: json['audio'] as String?,
+        subtitleId: json['subtitle'] as String?,
+        subtitlePath: json['subtitlePath'] as String?,
+        audioLang: json['audioLang'] as String?,
+        audioTitle: json['audioTitle'] as String?,
+        subtitleLang: json['subtitleLang'] as String?,
+        subtitleTitle: json['subtitleTitle'] as String?,
+      );
 }
 
 /// 一条播放进度。
@@ -452,12 +561,22 @@ class MediaDetail {
 ///
 /// 除了 [pair]，所有请求都会带上 [ServerConnection.token]。
 class PavlClient {
-  PavlClient({required this.connection, HttpClient? httpClient})
-      : _http = httpClient ?? HttpClient() {
+  PavlClient({
+    required this.connection,
+    HttpClient? httpClient,
+    this.deviceId,
+  }) : _http = httpClient ?? HttpClient() {
     _http.connectionTimeout = const Duration(seconds: 6);
   }
 
   final ServerConnection connection;
+
+  /// 本机设备 id，随请求头发给服务端。
+  ///
+  /// 服务端优先用令牌反查设备；没设 PIN 时免鉴权，只能靠这个头认机器，
+  /// 否则「哪台机器对哪部片选了什么轨」无从区分。
+  final String? deviceId;
+
   final HttpClient _http;
 
   /// 播放器要用的请求头（libmpv 只认 URL 和请求头）。
@@ -578,6 +697,46 @@ class PavlClient {
     await _postJson('/api/v1/media/meta', {'path': path, ...meta});
   }
 
+  /// 读这台机器在这个服务端上的全部播放偏好，键是影片相对路径。
+  ///
+  /// 只对安装版服务端调用；便携版由客户端自己存本地。
+  Future<Map<String, TrackPreference>> allTrackPrefs() async {
+    final json = await _getJson('/api/v1/prefs/tracks');
+    final raw = json['prefs'];
+    final result = <String, TrackPreference>{};
+    if (raw is Map) {
+      raw.forEach((key, value) {
+        if (key is String && value is Map) {
+          result[key] = TrackPreference.fromServerJson(value);
+        }
+      });
+    }
+    return result;
+  }
+
+  /// 写一部片的播放偏好到服务端。
+  ///
+  /// 只发非空字段，空值不发：服务端把「不发」当作保留原值，把「发 null/空串」
+  /// 当作删除该字段。所以取消外挂字幕要发空串，而不是干脆不发。
+  Future<void> putTrackPrefs(String path, TrackPreference pref) async {
+    await _postJson('/api/v1/prefs/tracks', {
+      'path': path,
+      'audio': pref.audioId,
+      'subtitle': pref.subtitleId,
+      'subtitlePath': pref.subtitlePath ?? '',
+      if (pref.audioLang != null) 'audioLang': pref.audioLang,
+      if (pref.audioTitle != null) 'audioTitle': pref.audioTitle,
+      if (pref.subtitleLang != null) 'subtitleLang': pref.subtitleLang,
+      if (pref.subtitleTitle != null) 'subtitleTitle': pref.subtitleTitle,
+    });
+  }
+
+  /// 清掉这台机器在这个服务端上的全部偏好，返回删掉的条目数。
+  Future<int> clearTrackPrefs() async {
+    final json = await _send('DELETE', '/api/v1/prefs/tracks');
+    return (json['removed'] as num?)?.toInt() ?? 0;
+  }
+
   /// 最近播放列表。
   ///
   /// 服务端按最后更新时间倒序返回，每条形如
@@ -643,6 +802,12 @@ class PavlClient {
     final token = connection.token;
     if (auth && token != null && token.isNotEmpty) {
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+    }
+    // 服务端优先用令牌反查设备；没设 PIN 时免鉴权，只能靠这个头认机器。
+    // 两种情况下都带上，省得服务端为「有没有令牌」写两套分支。
+    final id = deviceId;
+    if (id != null && id.isNotEmpty) {
+      request.headers.set('X-PAVL-Device', id);
     }
     if (body != null) {
       request.headers.contentType = ContentType.json;

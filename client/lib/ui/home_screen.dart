@@ -116,13 +116,22 @@ class _HomeScreenState extends State<HomeScreen> {
         name: server.name,
         host: server.host,
         port: server.port,
+        storage: server.storage,
       );
       await widget.store.upsertServer(connection);
-    } else if (connection.host != server.host ||
-        connection.port != server.port) {
-      // 服务器换了 IP（DHCP 续租常见），更新地址但保留令牌。
-      connection = connection.copyWith(host: server.host, port: server.port);
-      await widget.store.upsertServer(connection);
+    } else {
+      // 服务器换了 IP（DHCP 续租常见），更新地址但保留令牌；顺带刷新
+      // 存储形态——服务端可能在两次连接之间从便携版换成了安装版。
+      if (connection.host != server.host ||
+          connection.port != server.port ||
+          connection.storage != server.storage) {
+        connection = connection.copyWith(
+          host: server.host,
+          port: server.port,
+          storage: server.storage,
+        );
+        await widget.store.upsertServer(connection);
+      }
     }
 
     if (!mounted) return;

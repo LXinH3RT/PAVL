@@ -41,12 +41,13 @@ Which formats play is a property of the client, not of the server.
 | **Sorting** | Sorted on the server: folders first, numbers by value (`Episode 2` before `Episode 10`), letters case-insensitive, Chinese characters by pinyin. Size and modified time are also available |
 | **Library** | Every video pulled into one flat list, ordered by title, searchable by keyword, paged as you scroll, with recently played on top |
 | **Playback** | Play-pause, ±10 s, scrubbing, 0.5x–2.0x speed, volume, fullscreen; the display is kept awake while playing and released on pause or exit |
-| **Track selection** | Audio and subtitle tracks listed separately; the choice is remembered per file and restored on reopen |
+| **Track selection** | Audio and subtitle tracks listed separately; the choice is remembered per file and restored on reopen. When a track id changes (another episode, a remux, a re-encode) it falls back to the same language or title |
 | **Subtitles** | Embedded tracks plus sidecar files in the same folder, matched by base name and episode number first and by similarity as a fallback; ASS styling renders as authored |
 | **Progress** | Two modes: this device only, or synced across devices so you can continue on another machine; the list shows progress and percentage |
 | **Resume** | Reopening a file offers the previous position: start over or continue |
-| **Portable** | On Windows the client keeps its data, logs and temporary files in a `PAVL-data/` folder next to the executable, so copying the folder is enough; on macOS it follows the platform convention and uses `~/Library/Application Support/PAVL` |
-| **Tray** | The server lives in the notification area; right-click to add or change shared folders and to read the address and PIN. Changes take effect immediately without a restart |
+| **Settings** | A dedicated page with five sections down the left: playback, tracks and subtitles, this device, server, about and troubleshooting. The rail moves to the top when the window narrows |
+| **Portable** | Both the server and the Windows client keep data, logs and temporary files in a `PAVL-data/` folder next to the executable, so copying the folder is enough. If the server ends up in a read-only location it falls back to `%APPDATA%\PAVL` |
+| **Tray** | The server lives in the notification area; right-click to add or change shared folders, stop sharing one of them, and to read the address and PIN. Changes take effect immediately without a restart |
 | **Diagnostics** | Playback failures report a reason and the log location; sensitive fields such as tokens are redacted |
 
 ## Screens
@@ -115,6 +116,51 @@ A few deliberate trade-offs:
 * **The server does not parse video.** Duration and codec information is written back by a client when
   it opens a file, so files that were never played show their size only.
 
+### Where the data lives
+
+Both sides ask whether the program folder is writable, not whether an installer was used — the server
+has only ever been a single executable, so "installed" just means it was put somewhere read-only such
+as `Program Files`.
+
+| Form | Criterion | Server data | Client data |
+| --- | --- | --- | --- |
+| Portable | program folder writable | `<program folder>/PAVL-data/` | `<program folder>/PAVL-data/` |
+| Installed | program folder read-only | `%APPDATA%\PAVL` (macOS and Linux fall back to `~/Library/Application Support/PAVL` and `$XDG_CONFIG_HOME/pavl`) | same |
+
+The first time the server starts in portable form it copies `config.json`, `devices.json`,
+`progress.json`, `prefs.json` and `meta.json` from `%APPDATA%\PAVL`. Only files that do not exist at
+the destination are copied, and the originals are left in place.
+
+A process started by the interpreter (`dart run bin/pavl.dart`) is always treated as installed,
+otherwise the configuration would land inside the Dart SDK's `bin/` directory. Set the `PAVL_DATA_DIR`
+environment variable to point the data elsewhere for a single run.
+
+### Where track choices are stored
+
+Because a portable bundle is often handed to someone else, the track choice is kept on the client in
+`client.json` when the server is portable — storing it on the server would mean choosing subtitles on
+the next person's behalf. When the server is installed, the choice goes into `prefs.json` on the server
+and is keyed by device id, so several machines can share one server and still keep their own choices.
+It is not synced across devices; that is a separate feature.
+
+```json
+{
+  "<relative path>": {
+    "devices": {
+      "<device id>": {
+        "audio": "2", "audioLang": "zho", "audioTitle": "Mandarin",
+        "subtitle": "1", "subtitlePath": null,
+        "updatedAt": 1794217636835
+      }
+    }
+  }
+}
+```
+
+Which of the two applies is decided by the `storage` field of `/api/v1/info` (`portable` or
+`installed`). An older server that lacks the field is treated as portable, which matches its previous
+behaviour. The settings page shows which path is in use and can clear every remembered choice at once.
+
 ## Layout
 
 ```
@@ -125,7 +171,7 @@ PAVL/
 │     ├─ config.dart           Config storage, media roots
 │     ├─ media.dart            Extension kinds, filename parsing
 │     ├─ sort_key.dart         The single collation rule (pinyin, numbers, case)
-│     ├─ library.dart          Directory tree, library index, cache, progress, metadata
+│     ├─ library.dart          Directory tree, library index, cache, progress, metadata, prefs
 │     ├─ auth.dart             PIN pairing, tokens, device management
 │     ├─ discovery.dart        UDP broadcast discovery
 │     ├─ streaming.dart        HTTP Range file serving
@@ -163,19 +209,24 @@ dart compile exe bin/pavl.dart -o ../build/pavl.exe
 python scripts/setup_media_kit_deps.py    # pre-fetch libmpv and ANGLE
 cd client
 flutter pub get
-flutter build windows --release
+flutter build windows --release --dart-define=PAVL_VERSION=0.2.2
 ```
 
 `setup_media_kit_deps.py` downloads the libmpv and ANGLE prebuilt packages that media_kit needs into the
 expected location, so that the CMake build does not have to fetch them itself. Behind a proxy or on a
 slow connection this step is what prevents the build from failing with an integrity error.
 
+The version lives in `pubspec.yaml`, but Flutter does not compile it into the binary, so the "about"
+section of the settings page gets it through `--dart-define=PAVL_VERSION=x.y.z` at build time. Omitting
+the flag does not break the build; the page just falls back to the default value in
+`client/lib/util/build_info.dart`.
+
 **Client** (macOS, run on the Mac)
 
 ```
 cd client
 flutter pub get
-flutter build macos --release
+flutter build macos --release --dart-define=PAVL_VERSION=0.2.2
 ```
 
 On macOS the libmpv frameworks are fetched by `media_kit_libs_macos_video` during `pod install`, so no
@@ -251,7 +302,8 @@ icon and the native dialogs.
 * The server ships for Windows only; on other platforms it builds and runs but has no tray menu.
 * The firewall port must be allowed manually; there is no self-check yet.
 * The macOS client needs the Local Network permission on first launch. After a denial the system stops
-  asking; if a manual broadcast then finds no server, the client points the user to
+  asking; if a manual broadcast then finds no server, the client falls back to probing the servers it
+  has already paired with, and only then points the user to
   System Settings → Privacy & Security → Local Network.
 * Poster and synopsis support is exposed by the API but not surfaced in the UI.
 

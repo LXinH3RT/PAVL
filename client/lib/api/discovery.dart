@@ -48,6 +48,9 @@ class DiscoverySession {
       return const [];
     }
 
+    // 先把网卡列表拿好：广播目标要用它算，而 send 是同步调用，没法在里面 await。
+    _targets = await _computeBroadcastTargets();
+
     // 连发三次，避免首次广播被交换机或 AP 丢掉。
     _broadcast();
     Timer(const Duration(milliseconds: 600), _broadcast);
@@ -63,16 +66,71 @@ class DiscoverySession {
     return list;
   }
 
+  /// 往所有可能的广播地址各发一份。
+  ///
+  /// 目标地址由 [_computeBroadcastTargets] 算好，这里只管发。
   void _broadcast() {
     final socket = _socket;
     if (socket == null) return;
     final payload = utf8.encode(jsonEncode({'magic': _magic}));
-    try {
-      socket.send(payload, InternetAddress('255.255.255.255'), discoveryPort);
-    } on SocketException {
-      // 部分网络禁止全局广播，忽略即可，后面还有手动输入兜底。
+    for (final address in _broadcastTargets) {
+      try {
+        socket.send(payload, address, discoveryPort);
+      } on SocketException {
+        // 部分网络禁止广播，忽略即可，后面还有手动输入兜底。
+      }
     }
   }
+
+  /// 广播目标地址，[run] 里已经算好；没算过就只发全局广播。
+  List<InternetAddress> get _broadcastTargets =>
+      _targets ?? [InternetAddress('255.255.255.255')];
+
+  /// 算出所有值得发一份的广播地址。
+  ///
+  /// 只发 `255.255.255.255` 在 macOS 上经常石沉大海：那张网卡的子网广播地址
+  /// （例如 `192.168.1.255`）才是交换机真正会转发的目标，而全局广播会被系统
+  /// 或路由器直接丢掉。两种都发一遍，代价只是多几个几十字节的包。
+  Future<List<InternetAddress>> _computeBroadcastTargets() async {
+    final targets = <InternetAddress>[InternetAddress('255.255.255.255')];
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+        includeLinkLocal: false,
+      );
+      for (final interface in interfaces) {
+        for (final subnet in interface.addresses) {
+          if (subnet.type != InternetAddressType.IPv4) continue;
+          if (subnet.isLoopback) continue;
+          final address = _slash24Broadcast(subnet.address);
+          if (address != null) targets.add(address);
+        }
+      }
+    } on Object {
+      // 列网卡失败（权限、离线）时只留全局广播。
+    }
+    return targets;
+  }
+
+  /// 按 /24 推算子网广播地址，例如 `192.168.1.21` → `192.168.1.255`。
+  ///
+  /// Dart 的 [NetworkInterface] 不暴露子网掩码，所以没法算出精确的广播地址。
+  /// 家用和小型办公网络基本都是 /24，按这个假设猜一个，比只发全局广播多
+  /// 一次命中机会；猜错了也只是多发一个没人收的包。
+  static InternetAddress? _slash24Broadcast(String ip) {
+    final parts = ip.split('.');
+    if (parts.length != 4) return null;
+    final octets = <int>[];
+    for (final part in parts) {
+      final value = int.tryParse(part);
+      if (value == null || value < 0 || value > 255) return null;
+      octets.add(value);
+    }
+    return InternetAddress('${octets[0]}.${octets[1]}.${octets[2]}.255');
+  }
+
+  List<InternetAddress>? _targets;
 
   void _onEvent(RawSocketEvent event) {
     if (event != RawSocketEvent.read || _finished) return;
@@ -107,6 +165,7 @@ class DiscoverySession {
         version: decoded['version'] as String? ?? '',
         serverId: decoded['id'] as String? ?? '$host:$port',
         requiresPairing: decoded['pairing'] as bool? ?? true,
+        storage: decoded['storage'] as String?,
       );
     } on FormatException {
       return null;
@@ -146,6 +205,7 @@ Future<DiscoveredServer?> probeHost(String host, int port) async {
       version: decoded['version'] as String? ?? '',
       serverId: decoded['id'] as String? ?? '$host:$port',
       requiresPairing: decoded['requiresPairing'] as bool? ?? true,
+      storage: decoded['storage'] as String?,
     );
   } on SocketException {
     return null;

@@ -1,7 +1,7 @@
 name: pavl_client
 description: "PAVL — Play All Videos in Lan，局域网跨设备视频播放器客户端"
 publish_to: 'none'
-version: 0.2.1+3
+version: 0.2.2+4
 
 environment:
   sdk: ^3.6.2

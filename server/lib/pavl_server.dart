@@ -19,7 +19,7 @@ import 'subtitle_match.dart';
 import 'streaming.dart';
 
 /// 服务端版本，出现在 /api/v1/info 与发现应答里。
-const String pavlVersion = '0.2.1';
+const String pavlVersion = '0.2.2';
 
 /// API 版本，客户端据此判断兼容性。
 const int apiVersion = 1;
@@ -33,6 +33,7 @@ class PavlServer {
     required this.auth,
     required this.metaStore,
     required this.progressStore,
+    required this.trackPrefStore,
     required this.serverId,
   });
 
@@ -42,6 +43,7 @@ class PavlServer {
   final AuthStore auth;
   final MetaStore metaStore;
   final ProgressStore progressStore;
+  final TrackPrefStore trackPrefStore;
 
   /// 服务器唯一标识，首次启动生成，用于多服务器区分。
   final String serverId;
@@ -84,6 +86,9 @@ class PavlServer {
         serverId: serverId,
         version: pavlVersion,
         requiresPairing: config.pin.isNotEmpty,
+        // 跟 /info 里那个字段同义。广播里也带上，客户端才能在选择服务器时
+        // 就知道该把播放偏好写到哪一侧。
+        storage: storageMode.wireName,
       );
       final ok = await discovery.start();
       if (ok) _discovery = discovery;
@@ -196,6 +201,9 @@ class PavlServer {
       case 'progress':
         await _handleProgress(request);
         return;
+      case 'prefs/tracks':
+        await _handleTrackPrefs(request);
+        return;
       case 'recent':
         await _handleRecent(request);
         return;
@@ -254,6 +262,10 @@ class PavlServer {
       'api': apiVersion,
       'id': serverId,
       'requiresPairing': config.pin.isNotEmpty,
+      // 便携版的数据目录跟着程序走，播放偏好不能存在服务端——否则把程序
+      // 文件夹拷给第二个人，对方就会读到别人选过的音轨。客户端据此决定
+      // 偏好落本地还是落服务端。
+      'storage': storageMode.wireName,
       'rootCount': config.roots.length,
       'indexedCount': library.indexedCount,
       'indexedAt': library.indexedAt?.millisecondsSinceEpoch,
@@ -634,6 +646,96 @@ class PavlServer {
         request, HttpStatus.methodNotAllowed, 'method_not_allowed', '不支持的方法');
   }
 
+  /// 每台机器对每个影片的音轨/字幕选择。
+  ///
+  /// 只在安装版上有意义：便携版服务端的数据跟着程序文件夹走，存下来会跟着
+  /// 文件夹一起被拷给别人，等于把甲的选择带给乙。客户端看到 `/info` 报
+  /// `storage: portable` 就不会来调这个接口。
+  Future<void> _handleTrackPrefs(HttpRequest request) async {
+    final authDevice = await _requireAuth(request);
+    if (config.pin.isNotEmpty && authDevice == null) return;
+    final deviceId = _deviceIdOf(request, authDevice);
+    if (deviceId == null || deviceId.isEmpty) {
+      await _sendError(request, HttpStatus.badRequest, 'bad_request',
+          '缺少设备标识，配对后再试');
+      return;
+    }
+
+    if (request.method == 'GET') {
+      final path = request.uri.queryParameters['path'];
+      if (path != null && path.isNotEmpty) {
+        final entry = await trackPrefStore.get(path, deviceId: deviceId);
+        await _sendJson(request, HttpStatus.ok, {'path': path, 'pref': entry});
+        return;
+      }
+      // 不带 path 时把这个设备的全部偏好一次发过去：客户端进片库时拉一次，
+      // 之后每开一集都用本地缓存，不用一集一个请求。
+      final all = await trackPrefStore.allFor(deviceId);
+      await _sendJson(request, HttpStatus.ok, {'prefs': all});
+      return;
+    }
+
+    if (request.method == 'POST') {
+      final body = await _readJsonBody(request);
+      if (body == null) {
+        await _sendError(
+            request, HttpStatus.badRequest, 'bad_request', '请求体不是合法 JSON');
+        return;
+      }
+      final path = body['path'];
+      if (path is! String || path.isEmpty) {
+        await _sendError(
+            request, HttpStatus.badRequest, 'bad_request', '缺少 path');
+        return;
+      }
+      final audio = body['audio'];
+      final subtitle = body['subtitle'];
+      final subtitlePath = body['subtitlePath'];
+      // 语言和标题一起存：同一部剧的下一集，轨道 id 往往和上一集对不上，
+      // 客户端要按语言/标题回退匹配，服务端只负责原样保管。
+      await trackPrefStore.put(
+        path,
+        deviceId: deviceId,
+        fields: {
+          'audio': audio is String && audio.isNotEmpty ? audio : null,
+          'subtitle':
+              subtitle is String && subtitle.isNotEmpty ? subtitle : null,
+          'subtitlePath':
+              subtitlePath is String && subtitlePath.isNotEmpty
+                  ? subtitlePath
+                  : null,
+          'audioLang': _nonEmptyString(body['audioLang']),
+          'audioTitle': _nonEmptyString(body['audioTitle']),
+          'subtitleLang': _nonEmptyString(body['subtitleLang']),
+          'subtitleTitle': _nonEmptyString(body['subtitleTitle']),
+        },
+      );
+      await _sendJson(request, HttpStatus.ok, {'ok': true});
+      return;
+    }
+
+    if (request.method == 'DELETE') {
+      final removed = await trackPrefStore.clear(deviceId);
+      await _sendJson(request, HttpStatus.ok, {'ok': true, 'removed': removed});
+      return;
+    }
+
+    await _sendError(
+        request, HttpStatus.methodNotAllowed, 'method_not_allowed', '不支持的方法');
+  }
+
+  /// 请求来自哪台设备。
+  ///
+  /// 配对了就用鉴权结果，那是可信的；没设 PIN 时服务端不鉴权，只能读客户端
+  /// 自己报的 `X-PAVL-Device` 头——这种情况下谁都能冒充谁，但没设 PIN 本身
+  /// 就意味着这台服务器对整个局域网开放，偏好记录被冒充不算新增风险。
+  String? _deviceIdOf(HttpRequest request, PairedDevice? authDevice) {
+    if (authDevice != null) return authDevice.id;
+    final header = request.headers.value('x-pavl-device');
+    if (header != null && header.isNotEmpty) return header;
+    return null;
+  }
+
   Future<void> _handleRecent(HttpRequest request) async {
     final authDevice = await _requireAuth(request);
     if (config.pin.isNotEmpty && authDevice == null) return;
@@ -723,6 +825,12 @@ class PavlServer {
     return null;
   }
 
+  static String? _nonEmptyString(Object? value) {
+    if (value is! String) return null;
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
   Future<Map<String, Object?>?> _readJsonBody(HttpRequest request) async {
     try {
       final text = await utf8.decoder.bind(request).join();
@@ -789,6 +897,7 @@ Future<PavlServer> startServer({
     auth: auth,
     metaStore: MetaStore.defaultStore(),
     progressStore: ProgressStore.defaultStore(),
+    trackPrefStore: TrackPrefStore.defaultStore(),
     serverId: serverId,
   );
   await server.start();

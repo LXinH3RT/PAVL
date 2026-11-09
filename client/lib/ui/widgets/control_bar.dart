@@ -198,6 +198,9 @@ class _ControlBarState extends State<ControlBar> {
   Widget _rateButton() {
     return StreamBuilder<double>(
       stream: widget.controller.player.stream.rate,
+      // 这条流只在倍速变化时推事件。弹出菜单每次打开都会重新订阅，
+      // 拿不到历史值就会落回 1.0，显示与真实倍速脱节。
+      initialData: widget.controller.player.state.rate,
       builder: (context, snapshot) {
         final rate = snapshot.data ?? 1.0;
         return PopupMenuButton<double>(
@@ -263,6 +266,9 @@ class _ControlBarState extends State<ControlBar> {
       width: 200,
       child: StreamBuilder<double>(
         stream: widget.controller.player.stream.volume,
+        // 同上：广播流不重放历史值。不塞初值的话，每次点开音量面板都会
+        // 显示成 100，用户以为音量被重置了，其实只是没读到当前值。
+        initialData: widget.controller.player.state.volume,
         builder: (context, snapshot) {
           final volume = snapshot.data ?? 100;
           return Row(

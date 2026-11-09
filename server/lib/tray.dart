@@ -33,6 +33,18 @@ abstract final class TrayCommand {
   static const int addRoot = 1005;
   static const int changeRoots = 1006;
   static const int exit = 1099;
+
+  /// 移除某个共享目录的命令号起点。
+  ///
+  /// 每个目录占一个号：第 n 个目录是 `removeRootBase + n`。菜单每次弹出都会
+  /// 重新调用 `onMenu`，所以号跟着当时的目录顺序走，不会错位。
+  static const int removeRootBase = 2000;
+
+  /// 把命令号翻译回目录下标，不是移除类命令时返回 null。
+  static int? rootIndexFrom(int id) {
+    if (id < removeRootBase) return null;
+    return id - removeRootBase;
+  }
 }
 
 /// 托盘菜单项。

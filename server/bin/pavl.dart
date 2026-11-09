@@ -156,6 +156,7 @@ Future<void> main(List<String> args) async {
         TrayMenuItem(TrayCommand.openBrowser, '在浏览器中打开'),
         TrayMenuItem(TrayCommand.openDataDir, '打开数据目录'),
         TrayMenuItem.separator(),
+        ..._rootMenuItems(config),
         TrayMenuItem(TrayCommand.addRoot, '添加共享目录…'),
         TrayMenuItem(TrayCommand.changeRoots, '更换共享目录…'),
         TrayMenuItem.separator(),
@@ -192,6 +193,8 @@ Future<void> main(List<String> args) async {
       stdout.writeln('    - ${root.displayName}  ${root.path}');
     }
     stdout.writeln('  配置: ${store.file.path}');
+    stdout.writeln(
+        '  形态: ${storageMode == StorageMode.portable ? "便携版（数据跟着程序走）" : "安装版（数据在用户配置目录）"}');
     stdout.writeln('');
     stdout.writeln('  按 Ctrl+C 停止。');
     stdout.writeln('');
@@ -247,7 +250,45 @@ Future<void> _handleTrayCommand(
       await server.reloadAuth();
     case TrayCommand.exit:
       _shutdown?.call();
+    default:
+      final index = TrayCommand.rootIndexFrom(id);
+      if (index != null) await _removeRootAt(index, config, store, server);
   }
+}
+
+/// 每个已共享目录一行「停止共享」。
+///
+/// 托盘菜单是纯文本协议，做不了勾选式子菜单，所以平铺出来：目录少的时候
+/// 这样反而一眼能看清一共有几个。
+List<TrayMenuItem> _rootMenuItems(ServerConfig config) {
+  if (config.roots.isEmpty) return const [];
+  return [
+    TrayMenuItem.info('共享目录'),
+    for (var i = 0; i < config.roots.length; i++)
+      TrayMenuItem(
+        TrayCommand.removeRootBase + i,
+        '停止共享：${config.roots[i].displayName}',
+      ),
+    TrayMenuItem.separator(),
+  ];
+}
+
+/// 移除列表里第 [index] 个共享目录。
+Future<void> _removeRootAt(
+  int index,
+  ServerConfig config,
+  ConfigStore store,
+  pavl.PavlServer server,
+) async {
+  if (index < 0 || index >= config.roots.length) return;
+  final root = config.roots.removeAt(index);
+  await store.save(config);
+  await _afterRootsChanged(server);
+  await _showMessageAsync(
+    config.roots.isEmpty
+        ? '已停止共享：\n${root.path}\n\n现在没有任何共享目录了，客户端会看到空列表。'
+        : '已停止共享：\n${root.path}\n\n还可以共享 ${config.roots.length} 个目录。',
+  );
 }
 
 /// 弹文件夹选择框。放到独立 isolate 里跑，免得服务器在用户挑目录时整个卡住。
@@ -440,6 +481,9 @@ void _printUsage() {
 String _describe(ServerConfig config, String configPath) {
   final buffer = StringBuffer();
   buffer.writeln('配置文件: $configPath');
+  buffer.writeln(
+      '存储形态: ${storageMode.wireName}'
+      '${storageMode == StorageMode.portable ? "（数据跟着程序目录走）" : "（数据在用户配置目录）"}');
   buffer.writeln('名称: ${config.serverName}');
   buffer.writeln('端口: ${config.port}');
   buffer.writeln('PIN : ${config.pin.isEmpty ? "(未设置)" : config.pin}');

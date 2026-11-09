@@ -31,12 +31,17 @@ bool isDiscoveryRequest(List<int> data) {
 }
 
 /// 发现应答的载荷。
+///
+/// `storage` 跟 `/api/v1/info` 里那个字段同义。客户端靠它判断播放偏好该存
+/// 自己这边还是存服务端，所以要跟着广播一起发出去：否则靠广播发现的安装版
+/// 服务端会被当成便携版，偏好就写到错误的机器上了。
 Map<String, Object?> buildResponse({
   required String serverName,
   required int httpPort,
   required String version,
   required String serverId,
   required bool requiresPairing,
+  required String storage,
 }) =>
     {
       'magic': discoveryMagic,
@@ -45,6 +50,7 @@ Map<String, Object?> buildResponse({
       'version': version,
       'id': serverId,
       'pairing': requiresPairing,
+      'storage': storage,
     };
 
 /// 服务端发现监听器。
@@ -56,6 +62,7 @@ class DiscoveryService {
     required this.serverId,
     required this.version,
     required this.requiresPairing,
+    required this.storage,
   });
 
   final int port;
@@ -66,6 +73,9 @@ class DiscoveryService {
 
   /// 是否要求配对（PIN 已设置）。
   bool requiresPairing;
+
+  /// 存储形态，`portable` 或 `installed`。
+  final String storage;
 
   RawDatagramSocket? _socket;
   Timer? _beacon;
@@ -93,6 +103,7 @@ class DiscoveryService {
           version: version,
           serverId: serverId,
           requiresPairing: requiresPairing,
+          storage: storage,
         )));
         try {
           socket.send(payload, datagram.address, datagram.port);
@@ -119,6 +130,7 @@ class DiscoveryService {
       version: version,
       serverId: serverId,
       requiresPairing: requiresPairing,
+      storage: storage,
     )));
     try {
       socket.send(payload, InternetAddress('255.255.255.255'), port);

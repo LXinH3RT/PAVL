@@ -912,3 +912,139 @@ class ProgressStore {
     return rows.take(limit).toList();
   }
 }
+
+/// 播放偏好存储：每台机器对每个影片选过哪条音轨、哪条字幕。
+///
+/// 只服务安装版服务端——便携版服务端的数据目录跟着程序走，播放偏好若存在
+/// 服务端，换一台机器连上来就会读到别人的选择；而便携版的定义就是「一个人
+/// 的 U 盘/文件夹」，客户端本地存一份更贴合。所以客户端只在
+/// `/info` 报告 `storage: installed` 时才读写这里。
+///
+/// 文件形状与 [ProgressStore] 一致，都是「顶层按文件路径索引 + devices
+/// 分设备字典」，这样两台机器各自的记录互不干扰：
+/// ```json
+/// { "电影/foo.mkv": { "devices": { "<deviceId>": { "audio": "1",
+///   "subtitle": "no", "subtitlePath": null, "updatedAt": 1794065606035 } } } }
+/// ```
+class TrackPrefStore {
+  TrackPrefStore(this.file);
+
+  final File file;
+  Map<String, Map<String, Object?>>? _cache;
+
+  static TrackPrefStore defaultStore() {
+    final dir = ConfigStore.resolveConfigDir();
+    return TrackPrefStore(
+        File('${dir.path}${Platform.pathSeparator}prefs.json'));
+  }
+
+  Future<Map<String, Map<String, Object?>>> _load() async {
+    final cached = _cache;
+    if (cached != null) return cached;
+    final map = <String, Map<String, Object?>>{};
+    if (await file.exists()) {
+      try {
+        final decoded = jsonDecode(await file.readAsString());
+        if (decoded is Map) {
+          decoded.forEach((key, value) {
+            if (key is String && value is Map) {
+              map[key] = value.cast<String, Object?>();
+            }
+          });
+        }
+      } on FormatException {
+        // 从空开始。
+      }
+    }
+    _cache = map;
+    return map;
+  }
+
+  /// 读某台设备的偏好；没记录过返回 null。
+  Future<Map<String, Object?>?> get(String path, {String? deviceId}) async {
+    if (deviceId == null || deviceId.isEmpty) return null;
+    final map = await _load();
+    final devices = map[path]?['devices'];
+    if (devices is Map && devices[deviceId] is Map) {
+      return (devices[deviceId] as Map).cast<String, Object?>();
+    }
+    return null;
+  }
+
+  /// 一次取走某台设备的全部偏好，键是文件相对路径。
+  ///
+  /// 客户端进入片库时拉一次，之后的播放先查本地缓存，避免每开一集都发请求。
+  Future<Map<String, Map<String, Object?>>> allFor(String deviceId) async {
+    final map = await _load();
+    final result = <String, Map<String, Object?>>{};
+    if (deviceId.isEmpty) return result;
+    map.forEach((path, entry) {
+      final devices = entry['devices'];
+      if (devices is Map && devices[deviceId] is Map) {
+        result[path] = (devices[deviceId] as Map).cast<String, Object?>();
+      }
+    });
+    return result;
+  }
+
+  /// 写入偏好。
+  ///
+  /// [fields] 只放要改的键，其余原值保留；值为 null 或空串表示删掉这个键，
+  /// 这样「取消外挂字幕」用一次写入就能表达，不必服务端猜语义。
+  Future<void> put(
+    String path, {
+    required String deviceId,
+    required Map<String, Object?> fields,
+  }) async {
+    final map = await _load();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final entry = map[path] ?? <String, Object?>{};
+    final devices = (entry['devices'] is Map)
+        ? (entry['devices'] as Map).cast<String, Object?>()
+        : <String, Object?>{};
+    final previous = devices[deviceId];
+    final record = <String, Object?>{
+      if (previous is Map) ...previous.cast<String, Object?>(),
+    };
+    fields.forEach((key, value) {
+      if (value == null || value == '') {
+        record.remove(key);
+      } else {
+        record[key] = value;
+      }
+    });
+    record['updatedAt'] = now;
+    devices[deviceId] = record;
+    entry['devices'] = devices;
+    map[path] = entry;
+    await _flush(map);
+  }
+
+  /// 清掉某台设备的全部偏好，返回删掉的条目数。
+  Future<int> clear(String deviceId) async {
+    final map = await _load();
+    var removed = 0;
+    map.forEach((path, entry) {
+      final devices = entry['devices'];
+      if (devices is Map && devices.containsKey(deviceId)) {
+        devices.remove(deviceId);
+        removed++;
+      }
+    });
+    if (removed > 0) {
+      map.removeWhere((_, entry) {
+        final devices = entry['devices'];
+        return devices is Map && devices.isEmpty;
+      });
+      await _flush(map);
+    }
+    return removed;
+  }
+
+  Future<void> _flush(Map<String, Map<String, Object?>> map) async {
+    await file.parent.create(recursive: true);
+    final tmp = File('${file.path}.tmp');
+    await tmp.writeAsString(jsonEncode(map), flush: true);
+    await tmp.rename(file.path);
+  }
+}
