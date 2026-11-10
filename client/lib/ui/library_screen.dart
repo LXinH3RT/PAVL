@@ -1,11 +1,15 @@
-/// 片库页：把整个共享目录里的视频拉平成一张表，配搜索与分页。
+/// 片库页：把整个共享目录里的视频按文件夹收拢后列出来，配搜索与分页。
 ///
-/// 与浏览页的区别是「不关心文件放在哪一层」：浏览页按目录一层层进，片库把
-/// 全库的片子按标题排成一列，找片时不必先想它在哪个文件夹。两页都保留——
-/// 按目录找是已知路径时的快路，片库是「记不住放哪儿」时的兜底。
+/// 与浏览页的区别是「不关心文件放在哪一层」：浏览页按目录一层层进，片库直接
+/// 把同一文件夹里的多个视频收成一行，行上写集数，点开才展开各集。这样一部
+/// 几十集的剧只占一行，找片不必一路往下滚。文件名仍然是完整的——展开后看到
+/// 的还是原始文件名，只是不再挤满屏。两页都保留：按目录找是已知路径时的快
+/// 路，片库是「记不住放哪儿」时的兜底。
 ///
-/// 排序与分页都由服务端完成：客户端只发页码和关键词。这样做是因为分页是把
-/// 全库切片后发过来的，客户端若只对当前页重排，跨页顺序会乱。
+/// 收拢、排序与分页都由服务端完成：客户端只发页码和关键词。这样做是因为分页
+/// 是把全库切片后发过来的，客户端若只对当前页重排，跨页顺序会乱；文件夹也只
+/// 能在服务端整份索引上切分，客户端拿到的若已经是页码切过的碎片，同一个文件夹
+/// 就会被切到两页里去。
 library;
 
 import 'dart:async';
@@ -43,7 +47,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
   final ScrollController _scrollController = ScrollController();
 
   LibraryPage _page = LibraryPage.empty;
-  final List<MediaEntry> _items = [];
+  final List<LibraryGroup> _items = [];
+
+  /// 已经展开的文件夹（键是 `LibraryGroup.path`）。
+  ///
+  /// 展开状态只活在页面里：离开片库再回来时还是收拢的。记住它反而会让人困惑
+  /// ——过几天再看，列表里一半是收拢一半是摊开的，比全收拢更乱。
+  final Set<String> _expanded = {};
 
   int _pageNo = 1;
   bool _loading = true;
@@ -103,10 +113,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
         _items
           ..clear()
           ..addAll(page.items);
+        // 换了关键词就是另一批结果，旧的行早已不在，展开记录留着只会越攒越多。
+        _expanded.clear();
         _recent = recent;
         _loading = false;
       });
-      logLine('library', '片库第 1 页 ${page.items.length} 条，共 ${page.total} 部');
+      logLine('library',
+          '片库第 1 页 ${page.items.length} 项，共 ${page.total} 项 / ${page.videoTotal} 部视频');
     } on PavlApiError catch (error) {
       if (!mounted || token != _requestId) return;
       setState(() {
@@ -285,12 +298,26 @@ class _LibraryScreenState extends State<LibraryScreen> {
     // 列表，混进一批不相关的片子只会干扰。
     final showRecent = _keyword.isEmpty && _recent.isNotEmpty;
     final recentCount = showRecent ? _recent.length : 0;
+
+    // 展开后的各集跟着文件夹行走形。这里先摊平再交给 ListView.builder，是为了
+    // 让懒加载按「屏幕上的行」算——展开一个 200 集的文件夹时，只有滚到眼前的
+    // 那几集会被构建。
+    final rows = <_VisibleRow>[];
+    for (final group in _items) {
+      rows.add(_VisibleRow(group));
+      if (group.isDir && _expanded.contains(group.path)) {
+        for (final entry in group.items) {
+          rows.add(_VisibleRow(group, entry: entry));
+        }
+      }
+    }
+
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
       itemCount: recentCount +
           (showRecent ? 1 : 0) +
-          _items.length +
+          rows.length +
           1, // 末尾的状态行（正在加载 / 已全部加载）
       itemBuilder: (context, index) {
         if (showRecent && index == 0) {
@@ -303,14 +330,42 @@ class _LibraryScreenState extends State<LibraryScreen> {
             onTap: () => unawaited(_openRecent(entry)),
           );
         }
-        final itemIndex = index - recentCount - (showRecent ? 1 : 0);
-        if (itemIndex >= _items.length) {
+        final rowIndex = index - recentCount - (showRecent ? 1 : 0);
+        if (rowIndex >= rows.length) {
           return _footer();
         }
-        final entry = _items[itemIndex];
-        return LibraryTile(entry: entry, onTap: () => unawaited(_open(entry)));
+        final row = rows[rowIndex];
+        final entry = row.entry;
+        if (entry != null) {
+          return LibraryTile(
+            entry: entry,
+            indent: true,
+            onTap: () => unawaited(_open(entry)),
+          );
+        }
+        final group = row.group;
+        // 散放的单个视频直接排成一行，点开就播；只有文件夹才需要先展开。
+        if (!group.isDir && group.items.isNotEmpty) {
+          final video = group.items.first;
+          return LibraryTile(
+            entry: video,
+            onTap: () => unawaited(_open(video)),
+          );
+        }
+        return LibraryGroupTile(
+          group: group,
+          expanded: _expanded.contains(group.path),
+          onTap: () => _toggle(group),
+        );
       },
     );
+  }
+
+  /// 展开或收起一个文件夹。
+  void _toggle(LibraryGroup group) {
+    setState(() {
+      if (!_expanded.remove(group.path)) _expanded.add(group.path);
+    });
   }
 
   Widget _footer() {
@@ -337,16 +392,32 @@ class _LibraryScreenState extends State<LibraryScreen> {
         ),
       );
     }
+    final total = _page.total;
+    final videos = _page.videoTotal;
+    // 收藏拢时就只报总数，免得「12 项 / 12 部」看着像多了一行废话。
+    final text = _keyword.isNotEmpty
+        ? '共 $total 项'
+        : (videos > total ? '共 $total 项 · $videos 部视频' : '共 $total 项');
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16),
       child: Center(
         child: Text(
-          '共 ${_page.total} 部',
+          text,
           style: const TextStyle(fontSize: 12, color: PavlColors.textDim),
         ),
       ),
     );
   }
+}
+
+/// 列表里的一行：文件夹行，或展开后从属的那一集。
+class _VisibleRow {
+  _VisibleRow(this.group, {this.entry});
+
+  final LibraryGroup group;
+
+  /// 非空表示这是文件夹里的一集。
+  final MediaEntry? entry;
 }
 
 /// 分组标题。

@@ -39,7 +39,7 @@ Which formats play is a property of the client, not of the server.
 | **Pairing** | One-time 6-digit PIN, exchanged for a 32-byte token; later connections are automatic. Paired devices can be reviewed and revoked from the server |
 | **Browsing** | Drill down folder by folder with item counts and file sizes; breadcrumbs jump back to any level; folders with no media are hidden |
 | **Sorting** | Sorted on the server: folders first, numbers by value (`Episode 2` before `Episode 10`), letters case-insensitive, Chinese characters by pinyin. Size and modified time are also available |
-| **Library** | Every video pulled into one flat list, ordered by title, searchable by keyword, paged as you scroll, with recently played on top (items watched to 90% are left out) |
+| **Library** | Grouped by folder: a folder row shows up to two levels of directory names plus its episode count, and expands in place; a folder holding one video shows that video directly. Ordered by name, searchable by keyword, paged as you scroll, with recently played on top (items watched to 90% are left out) |
 | **Playback** | Play-pause, ±10 s, scrubbing, 0.5x–2.0x speed, volume, fullscreen; the display is kept awake while playing and released on pause or exit |
 | **Track selection** | Audio and subtitle tracks listed separately; the choice is remembered per file and restored on reopen. When a track id changes (another episode, a remux, a re-encode) it falls back to the same language or title |
 | **Subtitles** | Embedded tracks plus sidecar files in the same folder, matched by base name and episode number first and by similarity as a fallback; ASS styling renders as authored |
@@ -176,6 +176,7 @@ PAVL/
 │     ├─ media.dart            Extension kinds, filename parsing
 │     ├─ sort_key.dart         The single collation rule (pinyin, numbers, case)
 │     ├─ library.dart          Directory tree, library index, cache, progress, metadata, prefs
+│     ├─ library_groups.dart   Folder grouping and paging units for the library
 │     ├─ auth.dart             PIN pairing, tokens, device management
 │     ├─ discovery.dart        UDP broadcast discovery
 │     ├─ streaming.dart        HTTP Range file serving

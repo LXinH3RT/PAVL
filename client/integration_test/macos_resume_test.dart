@@ -67,7 +67,7 @@ void main() {
       ),
     );
     final page = await client.library(page: 1, pageSize: 5);
-    videoPath = page.items.isEmpty ? null : page.items.first.path;
+    videoPath = page.firstVideo?.path;
   });
 
   tearDownAll(() => client.close());

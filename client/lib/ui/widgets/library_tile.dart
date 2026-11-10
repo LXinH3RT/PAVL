@@ -1,9 +1,9 @@
 /// 片库列表的行。
 ///
 /// 与浏览页的 [EntryTile] 分开：那边每行是一个文件系统条目，要显示「几项」、
-/// 文件夹图标、外挂字幕提示；这边每行是一部片，要显示解析出来的标题、季集
-/// 编号和文件大小。硬塞进同一个组件会让两边都长出一堆「当前是不是目录」的
-/// 分支。
+/// 文件夹图标、外挂字幕提示；这边每行是一部片或一个收拢后的文件夹，要显示
+/// 解析出来的标题、季集编号和文件大小。硬塞进同一个组件会让两边都长出一堆
+/// 「当前是不是目录」的分支。
 library;
 
 import 'package:flutter/material.dart';
@@ -11,12 +11,107 @@ import 'package:flutter/material.dart';
 import '../../api/pavl_client.dart';
 import '../../app.dart';
 
+/// 片库里的一个文件夹：一行写文件夹名与集数，点开才是里面的各集。
+class LibraryGroupTile extends StatelessWidget {
+  const LibraryGroupTile({
+    super.key,
+    required this.group,
+    required this.expanded,
+    required this.onTap,
+  });
+
+  final LibraryGroup group;
+
+  /// 是否已经展开。
+  final bool expanded;
+
+  /// 点这一行时切换展开状态。
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Icon(
+                  expanded ? Icons.folder_open : Icons.folder_outlined,
+                  size: 20,
+                  color: PavlColors.textDim,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        group.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        groupSubtitle(group),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: PavlColors.textDim,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 18,
+                  color: PavlColors.textDim,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 文件夹行下面那行说明：集数与所属共享目录。
+///
+/// 集数与「个视频」分开说，是因为同一个文件夹里也可能躺着几部电影而不是一部
+/// 剧——那些文件解析不出集号，写「集」会让人以为漏了编号。
+String groupSubtitle(LibraryGroup group) {
+  final numbered = group.items.any((e) => (e.episode ?? 0) > 0);
+  final unit = numbered ? '集' : '个视频';
+  final parts = <String>['${group.count} $unit'];
+  if (group.root.isNotEmpty) parts.add(group.root);
+  return parts.join(' · ');
+}
+
 /// 片库里的一部片。
 class LibraryTile extends StatelessWidget {
-  const LibraryTile({super.key, required this.entry, required this.onTap});
+  const LibraryTile({
+    super.key,
+    required this.entry,
+    required this.onTap,
+    this.indent = false,
+  });
 
   final MediaEntry entry;
   final VoidCallback onTap;
+
+  /// 是否缩进。展开文件夹之后里面的各集缩进一级，表示从属关系。
+  final bool indent;
 
   @override
   Widget build(BuildContext context) {
@@ -35,7 +130,7 @@ class LibraryTile extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(8),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: EdgeInsets.fromLTRB(indent ? 40 : 12, 10, 12, 10),
             child: Row(
               children: [
                 const Icon(Icons.movie_outlined,

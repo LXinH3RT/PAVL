@@ -13,6 +13,7 @@ import 'auth.dart';
 import 'config.dart';
 import 'discovery.dart';
 import 'library.dart';
+import 'library_groups.dart';
 import 'media.dart';
 import 'sort_key.dart';
 import 'subtitle_match.dart';
@@ -392,22 +393,21 @@ class PavlServer {
     if (kindFilter != null) {
       all = all.where((e) => e.kind.name == kindFilter).toList();
     }
-    // 片库是跨目录的扁平列表，按标题排比按路径排更符合直觉：索引里的默认顺序
-    // 是按 relativePath，那会把同一部剧的各个分集打散到不同目录段之间。
-    // 标题相同时再比路径，保证顺序稳定、翻页不会重复或漏项。
-    all = [...all]..sort((a, b) {
-        final byTitle = compareNames(a.parsed.title, b.parsed.title);
-        if (byTitle != 0) return byTitle;
-        return compareNames(a.relativePath, b.relativePath);
-      });
+    // 索引是跨目录扁平的一串视频，直接发出去的话，一部剧几十集就占几十行。
+    // 这里先按目录收成「文件夹 + 集数」的行再分页：客户端拿到的一行就是一行，
+    // 翻页不会把同一个文件夹切到两页里去。
+    final rows = groupLibrary(all);
 
-    final total = all.length;
+    final total = rows.length;
+    final videoTotal = all.length;
     final startIdx = ((page - 1) * pageSize).clamp(0, total);
     final endIdx = (startIdx + pageSize).clamp(0, total);
-    final slice = startIdx >= total ? <MediaEntry>[] : all.sublist(startIdx, endIdx);
+    final slice =
+        startIdx >= total ? <LibraryGroup>[] : rows.sublist(startIdx, endIdx);
 
     await _sendJson(request, HttpStatus.ok, {
       'total': total,
+      'videoTotal': videoTotal,
       'page': page,
       'pageSize': pageSize,
       'hasMore': endIdx < total,

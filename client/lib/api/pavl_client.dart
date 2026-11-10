@@ -255,11 +255,65 @@ class MediaEntry {
   }
 }
 
+/// 片库里的一行。
+///
+/// 服务端把同一文件夹里的视频收成一行发过来，行上是文件夹名与集数，展开后
+/// 才是各个文件。散放在根目录下的单个视频也占一行，此时 [isDir] 为 false、
+/// [items] 只有一个元素。
+class LibraryGroup {
+  LibraryGroup({
+    required this.kind,
+    required this.path,
+    required this.name,
+    this.root = '',
+    this.count = 0,
+    List<MediaEntry> items = const [],
+  }) : items = List<MediaEntry>.unmodifiable(items);
+
+  /// `dir` 或 `video`。
+  final String kind;
+
+  /// 文件夹的相对路径（`根名/一层/二层`），或视频的 `path`。
+  final String path;
+
+  /// 文件夹显示名（最多两段目录名，用 ` / ` 连接），或视频标题。
+  final String name;
+
+  /// 所属共享根目录的展示名。
+  final String root;
+
+  /// 视频条数，文件夹行就是行上显示的集数。
+  final int count;
+
+  /// 这一行的视频，按路径排好序。
+  final List<MediaEntry> items;
+
+  bool get isDir => kind == 'dir';
+
+  static LibraryGroup fromJson(Map<String, Object?> json) {
+    final raw = json['items'] as List<Object?>? ?? const [];
+    final items = [
+      for (final item in raw)
+        if (item is Map<String, Object?>) MediaEntry.fromJson(item),
+    ];
+    return LibraryGroup(
+      kind: json['kind'] as String? ?? 'video',
+      path: json['path'] as String? ?? '',
+      name: json['name'] as String? ?? '',
+      root: json['root'] as String? ?? '',
+      count: (json['count'] as num?)?.toInt() ?? items.length,
+      items: items,
+    );
+  }
+}
+
 /// 片库的一页。
 ///
-/// 除了当前页的条目，还带总数与是否还有下一页——分页控件要靠这两个字段决定
+/// 除了当前页的行，还带总数与是否还有下一页——分页控件要靠这两个字段决定
 /// 按钮可用状态，只靠「这一页拿满了 60 条」来推断会在整页刚好够数时多翻一次
 /// 空页。
+///
+/// [total] 是行数（文件夹算一行），[videoTotal] 是视频总数，两者不同。
 class LibraryPage {
   LibraryPage({
     required this.items,
@@ -267,22 +321,33 @@ class LibraryPage {
     required this.page,
     required this.pageSize,
     required this.hasMore,
+    this.videoTotal = 0,
   });
 
-  final List<MediaEntry> items;
+  final List<LibraryGroup> items;
   final int total;
+  final int videoTotal;
   final int page;
   final int pageSize;
   final bool hasMore;
+
+  /// 本页里第一个视频，用来在测试或预览里挑一个能播的条目。
+  MediaEntry? get firstVideo {
+    for (final group in items) {
+      if (group.items.isNotEmpty) return group.items.first;
+    }
+    return null;
+  }
 
   static LibraryPage fromJson(Map<String, Object?> json) {
     final raw = json['items'] as List<Object?>? ?? const [];
     return LibraryPage(
       items: [
         for (final item in raw)
-          if (item is Map<String, Object?>) MediaEntry.fromJson(item),
+          if (item is Map<String, Object?>) LibraryGroup.fromJson(item),
       ],
       total: (json['total'] as num?)?.toInt() ?? 0,
+      videoTotal: (json['videoTotal'] as num?)?.toInt() ?? 0,
       page: (json['page'] as num?)?.toInt() ?? 1,
       pageSize: (json['pageSize'] as num?)?.toInt() ?? 60,
       hasMore: json['hasMore'] as bool? ?? false,

@@ -1,7 +1,7 @@
 /// 片库页的 macOS 真机测试。
 ///
 /// 与前两套的分工：`macos_smoke_test.dart` 验网络与解码，`macos_ui_test.dart`
-/// 走「发现 → 配对 → 浏览 → 播放」，这里专测片库：跨目录拉平、按标题排序、
+/// 走「发现 → 配对 → 浏览 → 播放」，这里专测片库：按文件夹收拢、展开集数、
 /// 关键词搜索、分页状态。
 ///
 /// 运行方式同另外两套：
@@ -52,14 +52,30 @@ Future<String> _pairToken() async {
 
 /// 等片库条目渲染出来。
 ///
-/// 判定用 [LibraryTile] 而不是 `ListTile`：片库的每一行是自定义的 `InkWell`
-/// 布局（图标 + 标题 + 副行），不是 Material 的 `ListTile`。首屏要等两次
-/// 网络往返（分页 + 最近播放），给足 20 秒。
+/// 判定用 [LibraryTile] 与 [LibraryGroupTile] 而不是 `ListTile`：片库的每一行
+/// 是自定义的 `InkWell` 布局（图标 + 标题 + 副行），不是 Material 的
+/// `ListTile`。首屏要等两次网络往返（分页 + 最近播放），给足 20 秒。
 Future<void> _waitForTiles(WidgetTester tester) async {
   for (var i = 0; i < 100; i++) {
     await tester.pump(const Duration(milliseconds: 200));
-    if (find.byType(LibraryTile).evaluate().isNotEmpty) return;
+    if (find.byType(LibraryTile).evaluate().isNotEmpty ||
+        find.byType(LibraryGroupTile).evaluate().isNotEmpty) {
+      return;
+    }
   }
+}
+
+/// 当前界面上所有能点的行：散放视频、展开后的各集、文件夹。
+List<String> _visibleNames(WidgetTester tester) {
+  final names = <String>[];
+  for (final tile in tester.widgetList<LibraryTile>(find.byType(LibraryTile))) {
+    names.add(tile.entry.displayTitle);
+  }
+  for (final tile
+      in tester.widgetList<LibraryGroupTile>(find.byType(LibraryGroupTile))) {
+    names.add(tile.group.name);
+  }
+  return names;
 }
 
 void main() {
@@ -90,7 +106,8 @@ void main() {
       isNotEmpty,
       reason: '服务端片库为空，测试数据没准备好',
     );
-    logLine('test', '接口片库 ${page.items.length} 条，共 ${page.total} 部');
+    logLine('test',
+        '接口片库 ${page.items.length} 项，共 ${page.total} 项 / ${page.videoTotal} 部视频');
 
     await tester.pumpWidget(
       MaterialApp(
@@ -106,14 +123,10 @@ void main() {
       reason: '20 秒内片库列表没有渲染出来',
     );
 
-    // 界面上的标题应当按接口返回的顺序出现。取前三条比对，全量比对会因为
+    // 界面上的行应当按接口返回的顺序出现。取前三条比对，全量比对会因为
     // 列表懒加载而拿不到屏幕外的项。
-    final expected = page.items.take(3).map((e) => e.displayTitle).toList();
-    final rendered = <String>[];
-    for (final text in tester.widgetList<Text>(find.byType(Text))) {
-      final data = text.data;
-      if (data != null && expected.contains(data)) rendered.add(data);
-    }
+    final expected = page.items.take(3).map((e) => e.name).toList();
+    final rendered = _visibleNames(tester);
     logLine('test', '界面首屏顺序 ${rendered.join(" | ")}');
     expect(
       rendered.take(expected.length).toList(),
@@ -144,7 +157,7 @@ void main() {
       markTestSkipped('服务端片库为空，测试数据没准备好');
       return;
     }
-    final sample = all.items.first.displayTitle;
+    final sample = all.firstVideo?.displayTitle ?? all.items.first.name;
     final needle = sample.substring(0, sample.length >= 2 ? 2 : 1);
     final expected = await client.library(
       page: 1,
@@ -169,7 +182,7 @@ void main() {
     expect(
       expected.total,
       lessThan(all.total),
-      reason: '关键词没有起到收窄作用，全量 ${all.total} 部、搜索结果也是 ${expected.total} 部',
+      reason: '关键词没有起到收窄作用，全量 ${all.total} 项、搜索结果也是 ${expected.total} 项',
     );
 
     // 界面上每一项都应当命中关键词。判断依据是渲染出来的条目，而不是列表
@@ -179,17 +192,36 @@ void main() {
     // 的标题解析成 `Avatar`，路径里却仍有 `2009`，搜 `20` 时它确实是命中项。
     final entries =
         tester.widgetList<LibraryTile>(find.byType(LibraryTile)).map((t) => t.entry).toList();
+    final groups =
+        tester.widgetList<LibraryGroupTile>(find.byType(LibraryGroupTile)).map((t) => t.group).toList();
     logLine('test',
-        '搜索「$needle」后界面显示 ${entries.length} 行：${entries.map((e) => e.displayTitle).join(" | ")}');
-    expect(entries, isNotEmpty, reason: '搜索后列表不该是空的');
+        '搜索「$needle」后界面显示 ${entries.length + groups.length} 行：${[...entries.map((e) => e.displayTitle), ...groups.map((g) => g.name)].join(" | ")}');
+    expect(entries.length + groups.length, greaterThan(0),
+        reason: '搜索后列表不该是空的');
+    // 命中范围是「标题或相对路径」，两者都要查：服务端把 `Avatar.2009.mkv`
+    // 的标题解析成 `Avatar`，路径里却仍有 `2009`，搜 `20` 时它确实是命中项。
+    // 文件夹行看的是名下每一条视频，任一条命中就算这一行命中。
     final lowered = needle.toLowerCase();
-    for (final entry in entries) {
-      final hit = entry.displayTitle.toLowerCase().contains(lowered) ||
-          entry.path.toLowerCase().contains(lowered);
+    void expectHit(String label, String path) {
+      final hit = label.toLowerCase().contains(lowered) ||
+          path.toLowerCase().contains(lowered);
       expect(
         hit,
         isTrue,
-        reason: '「${entry.path}」的标题与路径都不含「$needle」，说明过滤没生效',
+        reason: '「$path」的标题与路径都不含「$needle」，说明过滤没生效',
+      );
+    }
+
+    for (final entry in entries) {
+      expectHit(entry.displayTitle, entry.path);
+    }
+    for (final group in groups) {
+      expect(
+        group.items.any((e) =>
+            e.displayTitle.toLowerCase().contains(lowered) ||
+            e.path.toLowerCase().contains(lowered)),
+        isTrue,
+        reason: '文件夹「${group.name}」里没有一条视频含「$needle」，说明过滤没生效',
       );
     }
   });
@@ -244,8 +276,9 @@ void main() {
       reason: '清空关键词后不该还是空态',
     );
     expect(
-      find.byType(LibraryTile).evaluate(),
-      isNotEmpty,
+      find.byType(LibraryTile).evaluate().isNotEmpty ||
+          find.byType(LibraryGroupTile).evaluate().isNotEmpty,
+      isTrue,
       reason: '清空关键词后列表应当重新有内容',
     );
   });
