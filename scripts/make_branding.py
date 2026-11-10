@@ -11,6 +11,11 @@
                                                 macOS 应用图标（16~1024，10 档）
     server/lib/tray_icon.dart                   托盘图标（内嵌 base64 的 ico）
 
+app_icon.ico 有两个用途：客户端通过 windows/runner/Runner.rc 里的 IDI_APP_ICON 直接进 exe
+资源；服务端由 `dart compile exe` 产出、没有 rc，需要打包时用 scripts/embed_icon.py 把它写进
+exe 的 RT_ICON/RT_GROUP_ICON。所以这个 ico 是服务端文件图标的唯一来源，改图标必须重跑本脚本
+并重新给服务端补图标。
+
 图标分档策略：48px 及以上用完整字标，32px 及以下只用三角标记——同样尺寸
 里再塞 4 个字母会失去可辨识度，这是图标设计的通行做法。托盘图标跟随系统
 DPI，取 16/20/24/32/40/48/64 七档，一律用三角标记。

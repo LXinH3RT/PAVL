@@ -195,7 +195,7 @@ PAVL/
 │  ├─ assets/fonts/            UI font and its license
 │  ├─ windows/                 Windows platform project
 │  └─ macos/                   macOS platform project
-├─ scripts/                    Build, packaging and UI verification scripts
+├─ scripts/                    Branding, build, packaging and UI verification scripts
 └─ docs/images/                Documentation screenshots
 ```
 
@@ -207,7 +207,16 @@ PAVL/
 cd server
 dart pub get
 dart compile exe bin/pavl.dart -o ../build/pavl.exe
+cd .. && python scripts/embed_icon.py     # attach the application icon
 ```
+
+`dart compile exe` has no icon option, so the exe it produces carries no icon resources and Explorer
+and the taskbar fall back to the generic blank program icon. The tray icon is unaffected, since that
+one is drawn at runtime. `embed_icon.py` writes `client/windows/runner/resources/app_icon.ico` into
+the exe as `RT_ICON` and `RT_GROUP_ICON` through pywin32 and leaves every existing resource alone. An
+exe that already has an icon is skipped, so the script is safe to run repeatedly.
+`scripts/package.py --server` calls it automatically before packaging, so packaging scripts do not
+need the extra step.
 
 **Client** (Windows)
 

@@ -181,7 +181,7 @@ PAVL/
 │  ├─ assets/fonts/            界面字体与许可
 │  ├─ windows/                 Windows 平台工程
 │  └─ macos/                   macOS 平台工程
-├─ scripts/                   构建、打包与界面验证脚本
+├─ scripts/                   品牌资源、构建、打包与界面验证脚本
 └─ docs/images/               文档截图
 ```
 
@@ -193,7 +193,14 @@ PAVL/
 cd server
 dart pub get
 dart compile exe bin/pavl.dart -o ../build/pavl.exe
+cd .. && python scripts/embed_icon.py     # 给 exe 补应用图标
 ```
+
+`dart compile exe` 不接受图标参数，编出来的 exe 里没有任何图标资源，资源管理器和任务栏会
+显示系统默认的空白程序图标（托盘图标不受影响，那是运行时另画的）。`embed_icon.py` 用
+pywin32 把 `client/windows/runner/resources/app_icon.ico` 写进 exe 的 `RT_ICON` 与
+`RT_GROUP_ICON`，原有资源原样保留；已经带图标的 exe 会自动跳过，重复执行没有副作用。
+`scripts/package.py --server` 在打包前会自动调它一次，因此用打包脚本出包时这一步可以省略。
 
 **客户端**（Windows）
 

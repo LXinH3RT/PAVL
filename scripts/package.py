@@ -55,6 +55,13 @@ import sys
 import zipfile
 from pathlib import Path
 
+# 本机用的是 Python 的嵌入式发行版，它带 python313._pth，不会像常规安装那样
+# 把脚本所在目录塞进 sys.path，直接 import 同目录的模块会报 ModuleNotFoundError。
+# 这里显式补一次，两种发行版下行为就一致了。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import embed_icon  # noqa: E402  （必须在 sys.path 调整之后）
+
 
 def _force_utf8_stdout() -> None:
     """Windows 控制台默认用 GBK，直接打印中文会变成乱码。
@@ -492,6 +499,12 @@ def _copy_license(target: Path) -> None:
 def package_server(out_root: Path, name: str) -> Path:
     """服务端包：只有一个 exe 和说明，不带客户端。"""
     _require(SERVER_EXE, "服务端 exe")
+
+    # 服务端是 dart compile exe 的产物，编译器不接受图标参数；不补这一步，
+    # 资源管理器与任务栏会显示系统默认的空白程序图标。已经带图标的 exe
+    # 会直接跳过，所以每次打包都可以放心调用。
+    if embed_icon.ensure_icon(SERVER_EXE):
+        print("图标补写: build/pavl.exe 已嵌入应用图标（此前没有）")
 
     target = _prepare(out_root, name)
     shutil.copy2(SERVER_EXE, target / "pavl.exe")
