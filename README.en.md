@@ -39,12 +39,12 @@ Which formats play is a property of the client, not of the server.
 | **Pairing** | One-time 6-digit PIN, exchanged for a 32-byte token; later connections are automatic. Paired devices can be reviewed and revoked from the server |
 | **Browsing** | Drill down folder by folder with item counts and file sizes; breadcrumbs jump back to any level; folders with no media are hidden |
 | **Sorting** | Sorted on the server: folders first, numbers by value (`Episode 2` before `Episode 10`), letters case-insensitive, Chinese characters by pinyin. Size and modified time are also available |
-| **Library** | Every video pulled into one flat list, ordered by title, searchable by keyword, paged as you scroll, with recently played on top |
+| **Library** | Every video pulled into one flat list, ordered by title, searchable by keyword, paged as you scroll, with recently played on top (items watched to 90% are left out) |
 | **Playback** | Play-pause, ±10 s, scrubbing, 0.5x–2.0x speed, volume, fullscreen; the display is kept awake while playing and released on pause or exit |
 | **Track selection** | Audio and subtitle tracks listed separately; the choice is remembered per file and restored on reopen. When a track id changes (another episode, a remux, a re-encode) it falls back to the same language or title |
 | **Subtitles** | Embedded tracks plus sidecar files in the same folder, matched by base name and episode number first and by similarity as a fallback; ASS styling renders as authored |
 | **Progress** | Two modes: this device only, or synced across devices so you can continue on another machine; the list shows progress and percentage |
-| **Resume** | Reopening a file offers the previous position: start over or continue |
+| **Resume** | Reopening a file offers the previous position: start over or continue; from 90% on a file counts as watched, so no prompt and no entry in recently played |
 | **Settings** | A dedicated page with two sections down the left: playback, about. The rail moves to the top when the window narrows |
 | **Portable** | Both the server and the Windows client keep data, logs and temporary files in a `PAVL-data/` folder next to the executable, so copying the folder is enough. If the server ends up in a read-only location it falls back to `%APPDATA%\PAVL` |
 | **Tray** | The server lives in the notification area; right-click to add or change shared folders, stop sharing one of them, and to read the address and PIN. Changes take effect immediately without a restart |
@@ -87,6 +87,8 @@ Keyboard controls while playing: `Space` play/pause, `←` `→` seek back/forwa
    **This must be allowed.** Otherwise discovery finds nothing and streaming is blocked. If it was
    denied, re-enable it under System Settings → Privacy & Security → Local Network.
 3. After that it behaves exactly like the Windows client.
+4. The red close button only hides the window into the Dock; the app keeps running. Quit with `⌘Q`,
+   and click the Dock icon to bring the window back.
 
 ## How it works
 

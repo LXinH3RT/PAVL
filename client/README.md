@@ -35,6 +35,11 @@ flutter build macos --release
 `media_kit_libs_macos_video` 在 `pod install` 阶段下载，无需额外脚本。产物是 universal 二进制，
 Intel 与 Apple Silicon 共用同一个包。
 
+macOS 上点窗口左上角的红色按钮只把窗口收进 Dock，要真正退出按 `⌘Q`。实现靠两处配合：
+`Runner/AppDelegate.swift` 里 `applicationShouldTerminateAfterLastWindowClosed` 返回 `false`，
+`lib/main.dart` 里 `windowManager.setPreventClose(true)` 并挂一个 `WindowListener`，在
+`onWindowClose` 里 `hide()`。`applicationShouldHandleReopen` 负责点 Dock 图标时把窗口叫回来。
+
 `macos/Podfile` 的 `post_install` 会把所有 pod 的部署目标强制改成 12.0。新版 Xcode 只支持 12.0
 及以上的部署目标（实测 27.2 报 `the range of supported deployment target versions is 12.0 to
 27.2.x`），而依赖的 podspec 仍写着 10.9。这一段不要删，删掉后每次 `pod install` 都会被打回旧值
@@ -66,6 +71,7 @@ lib/
 ├─ util/        日志、平台差异（platform_support.dart）
 └─ app.dart     主题与全局字体
 assets/
+├─ LICENSE.txt  仓库根 LICENSE 的副本，设置页「关于 → 许可」读它
 ├─ fonts/       界面字体 MiSans 与许可文件
 └─ branding/    应用标识
 windows/        Windows 平台工程

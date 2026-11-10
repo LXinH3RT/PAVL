@@ -186,21 +186,26 @@ class PlaybackController {
     final uri = client.streamUri(mediaDetail.path);
     logLine('play', '拉流 ${redactUri(uri)} 起点=$startAt');
     final stopwatch = Stopwatch()..start();
+    // 起点交给 libmpv 的 start 属性，不在 open 之后再 seek。
+    //
+    // open 返回时 loadlist 只拿到了命令回执，文件还没真正开始解封装；此时
+    // 发 seek 会因为还没有可跳转的时长而失败，media_kit 只把它写进日志，
+    // 播放于是从 0 开始——「继续播放」在 macOS 上失效就是这个原因。start
+    // 走 MPV_EVENT_HOOK，在文件加载完成的那一刻由 libmpv 自己跳到该位置，
+    // 不经过命令队列。
+    final resume = (startAt != null && startAt > Duration.zero) ? startAt : null;
     try {
       await _player.open(
         Media(
           uri.toString(),
           httpHeaders: client.mediaHeaders,
+          start: resume,
         ),
         play: true,
       );
     } catch (error) {
       logLine('play', 'open 失败：$error');
       rethrow;
-    }
-
-    if (startAt != null && startAt > Duration.zero) {
-      await _player.seek(startAt);
     }
 
     // 恢复上次的音轨字幕选择。

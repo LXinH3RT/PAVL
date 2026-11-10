@@ -1,6 +1,7 @@
 /// PAVL 客户端入口。
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -10,6 +11,21 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'store/app_store.dart';
 import 'util/app_log.dart';
+
+/// 关窗口时把窗口收起来，而不是退出程序。
+///
+/// 只在 macOS 上挂：那边的惯例是关窗口不结束进程，Dock 图标还在，点一下就能
+/// 把窗口叫回来，只有 ⌘Q 才真正退出。Windows 上关窗口就是退出，保持不变。
+///
+/// [windowManager.setPreventClose] 让原生侧的 windowShouldClose 先发一条 close
+/// 事件再返回 false，所以这里收到回调时窗口还在，直接 hide 即可。
+class _MacHideOnClose with WindowListener {
+  @override
+  void onWindowClose() {
+    logLine('app', '关闭窗口，收进 Dock；⌘Q 退出');
+    unawaited(windowManager.hide());
+  }
+}
 
 /// 把 `Directory.systemTemp` 指到便携目录。
 ///
@@ -46,6 +62,11 @@ Future<void> main() async {
     await windowManager.show();
     await windowManager.focus();
   });
+
+  if (Platform.isMacOS) {
+    await windowManager.setPreventClose(true);
+    windowManager.addListener(_MacHideOnClose());
+  }
 
   final store = await AppStore.load();
 

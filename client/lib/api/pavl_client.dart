@@ -412,8 +412,10 @@ class ProgressRecord {
 
   /// 是否值得问一句「要不要接着看」。
   ///
-  /// 刚开始看（前 5 秒）、已经看完、或者已经看到 95% 以上都不问。
-  bool get worthResuming => !finished && position > 5 && ratio < 0.95;
+  /// 刚开始看（前 5 秒）、已经看完、或者已经看到 90% 以上都不问。剩个尾
+  /// 巴的时候多半是在等片尾字幕，问「接着看」只会妨碍从头重看，所以按看
+  /// 完了对待。
+  bool get worthResuming => !finished && position > 5 && ratio < 0.9;
 
   static ProgressRecord? fromJson(Object? json) {
     if (json is! Map<String, Object?>) return null;

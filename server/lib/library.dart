@@ -901,15 +901,28 @@ class ProgressStore {
   }
 
   /// 最近观看列表。
+  ///
+  /// 看到 90% 以上的算看完，不进列表——片尾字幕一过就没什么可接着看的了，
+  /// 留在列表里只会把真正看到一半的片子挤下去。
   Future<List<Map<String, Object?>>> recent({int limit = 20}) async {
     final map = await _load();
     final rows = <Map<String, Object?>>[];
     map.forEach((path, entry) {
+      if (_watchedToEnd(entry)) return;
       rows.add({'path': path, ...entry});
     });
     rows.sort((a, b) => (b['updatedAt'] as int? ?? 0)
         .compareTo(a['updatedAt'] as int? ?? 0));
     return rows.take(limit).toList();
+  }
+
+  /// 这条进度是否已经看到 90% 以上。
+  static bool _watchedToEnd(Map<String, Object?> entry) {
+    if (entry['finished'] == true) return true;
+    final position = (entry['position'] as num?)?.toDouble() ?? 0;
+    final duration = (entry['duration'] as num?)?.toDouble() ?? 0;
+    if (duration <= 0) return false;
+    return position / duration >= 0.9;
   }
 }
 
