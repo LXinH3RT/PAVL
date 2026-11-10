@@ -77,7 +77,7 @@ CLIENT_DIR = ROOT / "client" / "build" / "windows" / "x64" / "runner" / "Release
 MACOS_APP = (
     ROOT / "client" / "build" / "macos" / "Build" / "Products" / "Release" / "PAVL.app"
 )
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 
 # 命名规则见模块说明。软件名固定，其它三段由平台与角色拼出来。
 APP_NAME = "PAVL"
@@ -229,14 +229,15 @@ PAVL 客户端（Windows 便携版）
 播放相关
 --------
 - 空格键播放/暂停，左右键 ±10 秒，上下键 ±5 音量，F 全屏，Esc 返回。
-- 右上角齿轮进入设置页，左侧分五类：播放、音轨与字幕、本机、服务器、
-  关于与排查。常用的两个开关在「播放」里：
+- 右上角齿轮进入设置页，左侧分两类：播放、关于。
+  「播放」里有两个开关：
   - 跨设备同步进度
     - 关：只记本机的播放位置。
     - 开：跟随服务器上最近一次的播放位置（可能来自其他设备）。
-  - 记住每部片的音轨与字幕
+  - 音轨与字幕记忆
     - 开：下次打开同一部片自动恢复上次选的轨。
     - 关：不再记录，也不会自动切换，已经记下的仍保留。
+  开关下面是「配置存储位置」，说明这些选择跟着谁走。
 - 底部可以调倍速 0.5x–2.0x、切换音轨、切换字幕。
   每部片选过的音轨与字幕会被记住，下次打开自动恢复。
 - 播放期间会阻止屏幕自动熄灭，暂停或退出时释放。
@@ -249,7 +250,7 @@ PAVL 客户端（Windows 便携版）
 放不出来怎么办
 --------------
 点开某部片后如果一直黑屏，界面上会给出原因与日志位置；
-也可以点右上角齿轮，在设置的「关于与排查」里复制日志路径。
+也可以点右上角齿轮，在设置的「关于」里复制日志路径。
 常见原因：显卡驱动或硬件解码初始化失败、服务端中途退出、
 防火墙拦住了端口。
 
@@ -258,14 +259,14 @@ PAVL 客户端（Windows 便携版）
 每部片选过的音轨与字幕会被记住，下次打开自动恢复。找不到原来的轨
 （换集、转封装都会改轨道 id）时，会按语言、标题退到最接近的一条。
 
-存在哪里取决于服务端形态：
+记录放在哪里由服务端形态决定，设置页的「配置存储位置」会直接写明：
 
-- 便携版服务端（数据在服务端程序目录旁）：选择放在本机客户端，
-  跟着客户端文件夹走，不带上服务器。
-- 安装版服务端（放在 Program Files 这类只读位置）：选择放在服务端，
-  并按设备分开记录，同一部片各设备记各的，不跨设备同步。
+- 便携版服务端：显示「跟随本机客户端目录」，选择放在客户端文件夹里，
+  换服务器也不丢。
+- 安装版服务端：显示「跟随『服务器名』目录」，选择放在服务端并按设备
+  分开记录，同一部片各设备记各的，不跨设备同步。
 
-设置页的「服务器」一栏会写明当前这台属于哪一种。
+这个位置不提供手动切换，只做告知。
 
 数据位置
 --------
@@ -278,8 +279,8 @@ PAVL 客户端（Windows 便携版）
 ----
 本包内含 libmpv（LGPL-2.1-or-later，GPL 组件已关闭，动态链接使用）、
 MiSans 字体（Apache License 2.0）与 Flutter 运行时（BSD-3-Clause）。
-完整声明见同目录的 LICENSE.txt，字体许可全文在
-data\\flutter_assets\\assets\\fonts\\ 下。
+完整声明见同目录的 LICENSE.txt，也可以在设置页的「关于 → 许可」里
+直接查看；字体许可全文在 data\\flutter_assets\\assets\\fonts\\ 下。
 
 Windows 安全提示
 ----------------
@@ -449,6 +450,25 @@ def _report(target: Path) -> None:
     print(f"总大小  : {total / 1024 / 1024:.1f} MB")
 
 
+def check_license_copies() -> None:
+    """确认客户端内嵌的许可证副本与仓库根 LICENSE 完全一致。
+
+    客户端「关于 → 许可」读的是随包分发的 assets/LICENSE.txt，包外的
+    LICENSE.txt 与它必须逐字相同，否则用户在不同入口看到的条款会不一样。
+    打包前比一次，不一致直接中止，避免把不一致的包发出去。
+    """
+    root_copy = (ROOT / "LICENSE").read_bytes()
+    asset_path = ROOT / "client" / "assets" / "LICENSE.txt"
+    if not asset_path.exists():
+        raise SystemExit(f"缺少客户端许可副本：{asset_path}，先复制仓库根的 LICENSE")
+    if asset_path.read_bytes() != root_copy:
+        raise SystemExit(
+            f"客户端许可副本与仓库根 LICENSE 不一致：{asset_path}\n"
+            "重新复制一份再打包：cp LICENSE client/assets/LICENSE.txt"
+        )
+    print(f"许可校验: client/assets/LICENSE.txt 与 LICENSE 一致（{len(root_copy)} 字节）")
+
+
 def _copy_license(target: Path) -> None:
     """把仓库根目录的 LICENSE 一并放进发布包。
 
@@ -531,6 +551,8 @@ def main() -> int:
 
     if args.name and sum([wanted_server, wanted_portable, wanted_macos]) > 1:
         parser.error("--name 只能和单个包一起用")
+
+    check_license_copies()
 
     out_root = Path(args.out)
     out_root.mkdir(parents=True, exist_ok=True)

@@ -4,6 +4,8 @@
 /// media_kit 的原生初始化，单元测试环境没有这些。
 library;
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pavl_client/api/pavl_client.dart';
 import 'package:pavl_client/util/app_log.dart';
@@ -42,6 +44,27 @@ void main() {
     test('时长未知时比例为 0，不能除零', () {
       final record = ProgressRecord(position: 30, duration: 0);
       expect(record.ratio, 0);
+    });
+  });
+
+  // 「关于 → 许可」读的是随包分发的 assets/LICENSE.txt，而不是安装目录里
+  // 的 LICENSE.txt。两份必须逐字相同：一旦有人只改了其中一份，客户端里
+  // 展示的条款就和包外那份对不上了。scripts/package.py 打包前也会比一遍。
+  group('许可证', () {
+    test('assets 里的副本与仓库根 LICENSE 逐字一致', () {
+      final repoLicense = File('../LICENSE');
+      final assetLicense = File('assets/LICENSE.txt');
+
+      expect(repoLicense.existsSync(), isTrue,
+          reason: '找不到仓库根的 LICENSE，工作目录应当在 client/ 下');
+      expect(assetLicense.existsSync(), isTrue,
+          reason: '找不到 assets/LICENSE.txt，pubspec.yaml 里要登记它');
+
+      final expected = repoLicense.readAsBytesSync();
+      final actual = assetLicense.readAsBytesSync();
+      expect(actual.length, expected.length,
+          reason: '两份许可证长度不同');
+      expect(actual, equals(expected), reason: '两份许可证内容不同');
     });
   });
 }

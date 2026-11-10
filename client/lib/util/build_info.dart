@@ -11,5 +11,5 @@ library;
 
 const String appVersion = String.fromEnvironment(
   'PAVL_VERSION',
-  defaultValue: '0.2.2',
+  defaultValue: '0.2.3',
 );

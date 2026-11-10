@@ -1,7 +1,7 @@
 name: pavl_client
 description: "PAVL — Play All Videos in Lan，局域网跨设备视频播放器客户端"
 publish_to: 'none'
-version: 0.2.2+4
+version: 0.2.3+5
 
 environment:
   sdk: ^3.6.2
@@ -46,6 +46,7 @@ flutter:
   # 许可证与来源声明必须随包分发，见 assets/fonts/NOTICE.txt。
   assets:
     - assets/branding/logo_mark.png
+    - assets/LICENSE.txt
     - assets/fonts/MiSans-LICENSE.txt
     - assets/fonts/NOTICE.txt
 

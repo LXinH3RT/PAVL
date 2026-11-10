@@ -45,7 +45,7 @@ Which formats play is a property of the client, not of the server.
 | **Subtitles** | Embedded tracks plus sidecar files in the same folder, matched by base name and episode number first and by similarity as a fallback; ASS styling renders as authored |
 | **Progress** | Two modes: this device only, or synced across devices so you can continue on another machine; the list shows progress and percentage |
 | **Resume** | Reopening a file offers the previous position: start over or continue |
-| **Settings** | A dedicated page with five sections down the left: playback, tracks and subtitles, this device, server, about and troubleshooting. The rail moves to the top when the window narrows |
+| **Settings** | A dedicated page with two sections down the left: playback, about. The rail moves to the top when the window narrows |
 | **Portable** | Both the server and the Windows client keep data, logs and temporary files in a `PAVL-data/` folder next to the executable, so copying the folder is enough. If the server ends up in a read-only location it falls back to `%APPDATA%\PAVL` |
 | **Tray** | The server lives in the notification area; right-click to add or change shared folders, stop sharing one of them, and to read the address and PIN. Changes take effect immediately without a restart |
 | **Diagnostics** | Playback failures report a reason and the log location; sensitive fields such as tokens are redacted |
@@ -159,7 +159,9 @@ It is not synced across devices; that is a separate feature.
 
 Which of the two applies is decided by the `storage` field of `/api/v1/info` (`portable` or
 `installed`). An older server that lacks the field is treated as portable, which matches its previous
-behaviour. The settings page shows which path is in use and can clear every remembered choice at once.
+behaviour. Settings → Playback holds the “remember track choices” switch; the “Where the config lives”
+line under it states which side keeps them, as “Follows this client's folder” for a portable server or
+“Follows the <server name> folder” for an installed one.
 
 ## Layout
 
@@ -186,6 +188,7 @@ PAVL/
 │  ├─ lib/player/              Playback controller wrapper
 │  ├─ lib/ui/                  Connect, browse, player, settings, pairing
 │  ├─ lib/util/                Logging, natural ordering, platform differences
+│  ├─ assets/LICENSE.txt       Full license text, bundled so Settings → About → License can show it
 │  ├─ assets/fonts/            UI font and its license
 │  ├─ windows/                 Windows platform project
 │  └─ macos/                   macOS platform project
@@ -209,7 +212,7 @@ dart compile exe bin/pavl.dart -o ../build/pavl.exe
 python scripts/setup_media_kit_deps.py    # pre-fetch libmpv and ANGLE
 cd client
 flutter pub get
-flutter build windows --release --dart-define=PAVL_VERSION=0.2.2
+flutter build windows --release --dart-define=PAVL_VERSION=0.2.3
 ```
 
 `setup_media_kit_deps.py` downloads the libmpv and ANGLE prebuilt packages that media_kit needs into the
@@ -226,7 +229,7 @@ the flag does not break the build; the page just falls back to the default value
 ```
 cd client
 flutter pub get
-flutter build macos --release --dart-define=PAVL_VERSION=0.2.2
+flutter build macos --release --dart-define=PAVL_VERSION=0.2.3
 ```
 
 On macOS the libmpv frameworks are fetched by `media_kit_libs_macos_video` during `pod install`, so no
@@ -310,6 +313,11 @@ icon and the native dialogs.
 ## License
 
 The code is original work released under the MIT license; see [LICENSE](LICENSE).
+
+The same text is bundled inside the client as `client/assets/LICENSE.txt`, which is what
+Settings → About → License reads and displays, so it does not depend on `LICENSE.txt` still
+sitting next to the installed program. `scripts/package.py` verifies the two copies are
+byte-identical before packaging.
 
 Third-party components bundled with the client:
 

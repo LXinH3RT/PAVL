@@ -1,8 +1,8 @@
 /// 设置页。
 ///
-/// 与以前的弹窗相比，这一页要放的东西多了一倍：播放行为、音轨字幕偏好、
-/// 本机信息、服务器状态、排查入口。平铺在一列里会滚很久，所以改成
-/// 「左侧目录 + 右侧内容」——一次只渲染一类，目录永远在眼前。
+/// 只留两类：播放行为与关于。音轨字幕的记忆开关在「播放」里，设备信息、
+/// 服务器信息、许可与排查入口都在「关于」里，一屏能看到底。以前拆成五类，
+/// 每类只有两三行，翻页的成本比找东西的成本还高。
 ///
 /// 窗口窄到放不下侧栏时目录改到顶部横排，条目一个不少。桌面端现在的分辨率
 /// 基本都用不到窄屏，但布局按宽度判断而不是按平台判断，将来上移动端时不用
@@ -16,21 +16,24 @@ import 'package:flutter/services.dart';
 
 import '../api/pavl_client.dart';
 import '../app.dart';
-import '../player/track_prefs.dart';
 import '../store/app_store.dart';
 import '../util/app_log.dart';
 import '../util/build_info.dart';
 import '../util/platform_support.dart';
 
+/// 随包分发的许可证文件。
+///
+/// 与仓库根的 `LICENSE` 必须逐字一致，`scripts/package.py` 打包前会比一遍，
+/// 不一致就中止。客户端内嵌一份是为了让「关于 → 许可」不依赖安装目录里的
+/// LICENSE.txt 还在不在：macOS 的许可放在 .app 外面，Windows 上也可能被单独删掉。
+const String licenseAssetPath = 'assets/LICENSE.txt';
+
 /// 设置页的分类。
 ///
-/// 顺序按「多久动一次」排：播放行为最常调，关于与排查基本只看一眼。
+/// 顺序按「多久动一次」排：播放行为最常调，关于基本只看一眼。
 enum SettingsTab {
   playback('播放'),
-  tracks('音轨与字幕'),
-  local('本机'),
-  server('服务器'),
-  about('关于与排查');
+  about('关于');
 
   const SettingsTab(this.label);
 
@@ -70,10 +73,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   late SettingsTab _tab = widget.initialTab ?? SettingsTab.playback;
 
-  /// 这台服务器上已记住多少部片。null 表示还在读。
-  int? _prefCount;
-  bool _prefBusy = false;
-
   /// 服务端版本。客户端存连接信息时只留了 id 与地址，版本没存，所以开这一
   /// 页时问一次 `/info`。那是免鉴权接口，不必带令牌。
   String? _serverVersion;
@@ -81,7 +80,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _loadPrefCount();
     _loadServerVersion();
   }
 
@@ -97,24 +95,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _scroll.dispose();
     super.dispose();
-  }
-
-  /// 偏好条数要问服务端（安装版）或本地（便携版），只有 [TrackPrefs] 知道
-  /// 该问哪边，所以这里必须临时建一个客户端。
-  Future<void> _loadPrefCount() async {
-    final client = PavlClient(
-      connection: widget.connection,
-      deviceId: widget.store.deviceId,
-    );
-    try {
-      final count = await TrackPrefs(
-        client: client,
-        store: widget.store,
-      ).count();
-      if (mounted) setState(() => _prefCount = count);
-    } finally {
-      client.close();
-    }
   }
 
   /// 问一次服务端版本。失败不提示，这一格显示「未知」就够了。
@@ -133,29 +113,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       logLine('ui', '读取服务端版本失败：$error');
     } finally {
       client.close();
-    }
-  }
-
-  Future<void> _clearPrefs() async {
-    setState(() => _prefBusy = true);
-    final client = PavlClient(
-      connection: widget.connection,
-      deviceId: widget.store.deviceId,
-    );
-    try {
-      final removed = await TrackPrefs(
-        client: client,
-        store: widget.store,
-      ).clear();
-      if (!mounted) return;
-      setState(() => _prefCount = 0);
-      _toast('已清空 $removed 条记录');
-    } catch (error) {
-      logLine('ui', '清空偏好失败：$error');
-      if (mounted) _toast('清空失败：$error');
-    } finally {
-      client.close();
-      if (mounted) setState(() => _prefBusy = false);
     }
   }
 
@@ -188,12 +145,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
     });
-    // 条数会变：在浏览器里放过片、在别的机器上清空过，都可能让这一格过时。
-    // 每次回到这一类就重新问一次，比在 initState 里问一次要准。
-    if (tab == SettingsTab.tracks) {
-      setState(() => _prefCount = null);
-      _loadPrefCount();
-    }
   }
 
   @override
@@ -275,7 +226,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           SwitchListTile(
             value: widget.store.rememberTracks,
-            title: const Text('记住每部片的音轨与字幕'),
+            title: const Text('音轨与字幕记忆'),
             subtitle: const Text(
               '关掉后不再记录选择，也不会自动切换。已经记下的内容仍保留，'
               '重新打开开关就恢复生效。',
@@ -284,75 +235,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
               () => widget.store.rememberTracks = value,
             ),
           ),
+          // 存储位置只做告知，不提供切换：跟着哪一边由服务端形态决定。
           ListTile(
-            title: const Text('播放设置存在哪'),
+            title: const Text('配置存储位置'),
             subtitle: Text(_storageHint),
-            trailing: Text(
-              _storageLabel,
-              style: const TextStyle(fontSize: 13, color: PavlColors.textDim),
-            ),
           ),
         ];
 
-      case SettingsTab.tracks:
+      case SettingsTab.about:
         return [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-            child: Text(
-              '打开一部片时，会先按 id 找回上次选的那条轨。找不到（换集、转封装、'
-              '重新压制都可能改 id）就退到同语言、同标题的轨；用户上次选了国语，'
-              '这一集多半还想听国语。',
-              style: const TextStyle(
-                fontSize: 12.5,
-                color: PavlColors.textDim,
-                height: 1.6,
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-            child: Text(
-              '外挂字幕优先于内嵌轨：手动挑过的字幕更贴近意图。同一目录下的 '
-              'srt/ass 会在打开时按文件名自动匹配。',
-              style: const TextStyle(
-                fontSize: 12.5,
-                color: PavlColors.textDim,
-                height: 1.6,
-              ),
-            ),
+          const _SectionTitle('应用'),
+          _KvTile(label: '客户端版本', value: appVersion),
+          _KvTile(label: '服务端版本', value: _serverVersionText),
+          ListTile(
+            title: const Text('许可'),
+            subtitle: const Text('PAVL 与第三方组件的许可条款'),
+            trailing: const Icon(Icons.chevron_right, size: 20),
+            onTap: _showLicense,
           ),
           const Divider(height: 24),
-          ListTile(
-            title: const Text('已记住的影片'),
-            subtitle: Text(
-              _prefCount == null ? '读取中…' : '$_prefCount 部',
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton.icon(
-                onPressed: (_prefBusy || (_prefCount ?? 0) == 0)
-                    ? null
-                    : _clearPrefs,
-                icon: const Icon(Icons.delete_outline, size: 18),
-                label: const Text('清空全部记录'),
-              ),
-            ),
-          ),
-        ];
-
-      case SettingsTab.local:
-        return [
+          const _SectionTitle('本机'),
           _KvTile(label: '设备名', value: widget.store.deviceName),
           _KvTile(label: '设备 ID', value: widget.store.deviceId),
           _KvTile(label: '数据目录', value: appDataDir().path),
           _KvTile(label: '平台', value: platformLabel),
-        ];
-
-      case SettingsTab.server:
-        return [
+          const Divider(height: 24),
+          const _SectionTitle('服务器'),
           _KvTile(label: '名称', value: widget.connection.name),
           _KvTile(
             label: '地址',
@@ -361,28 +269,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _KvTile(label: '状态', value: widget.connection.paired ? '已配对' : '未配对'),
           _KvTile(label: '存储形态', value: _storageLabel),
           const Divider(height: 24),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Text(
-              _storageLabel == '安装版'
-                  ? '安装版服务端可能给多台机器用，所以每台机器的音轨字幕选择'
-                      '存在服务端，并按设备区分。换一台设备看同一部片，各记各的。'
-                  : '便携版服务端的程序文件夹可能被整个拷给别人，把选择存在那边'
-                      '等于把自己的偏好带给别人，所以存在本机。',
-              style: const TextStyle(
-                fontSize: 12.5,
-                color: PavlColors.textDim,
-                height: 1.6,
-              ),
-            ),
-          ),
-        ];
-
-      case SettingsTab.about:
-        return [
-          _KvTile(label: '客户端版本', value: appVersion),
-          _KvTile(label: '服务端版本', value: _serverVersionText),
-          const Divider(height: 24),
+          const _SectionTitle('排查'),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
             child: const Text(
@@ -433,9 +320,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String get _storageLabel =>
       widget.connection.serverStoresPrefs ? '安装版' : '便携版';
 
-  String get _storageHint => widget.connection.serverStoresPrefs
-      ? '这台服务器是安装版，音轨字幕选择存在服务端，按设备区分，不跨设备同步。'
-      : '这台服务器是便携版，音轨字幕选择存在本机，跟着客户端文件夹走。';
+  /// 「配置存储位置」那一行的说明：只回答「跟着谁走」。
+  ///
+  /// 形态怎么判定、为什么这么分属于实现细节，写在 README 里，不占设置页。
+  String get _storageHint {
+    if (!widget.connection.serverStoresPrefs) return '跟随本机客户端目录';
+    final name = widget.connection.name.trim();
+    return name.isEmpty ? '跟随服务端目录' : '跟随“$name”目录';
+  }
+
+  /// 打开许可全文。
+  ///
+  /// 读的是随包分发的 asset，而不是安装目录里的 LICENSE.txt：那份文件在
+  /// macOS 上位于 .app 之外，Windows 上也可能被单独删掉。
+  Future<void> _showLicense() async {
+    final String text;
+    try {
+      text = await rootBundle.loadString(licenseAssetPath);
+    } catch (error) {
+      logLine('ui', '读取许可证失败：$error');
+      if (mounted) _toast('许可没能打开：$error');
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _LicenseDialog(text: text),
+    );
+  }
 
   Future<void> _copyLogPath() async {
     await Clipboard.setData(ClipboardData(text: logFile().path));
@@ -464,6 +376,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
       SnackBar(
         content: Text('系统打不开文件管理器，路径已复制：${dir.path}'),
         duration: const Duration(seconds: 6),
+      ),
+    );
+  }
+}
+
+/// 小节标题：「应用」「本机」「服务器」「排查」。
+///
+/// 与连接页的同类标题保持一套字号与字重，设置页里不另起一种。
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 12, 20, 6),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: PavlColors.textDim,
+          letterSpacing: 1.0,
+        ),
+      ),
+    );
+  }
+}
+
+/// 许可全文弹窗。
+///
+/// 条款是纯文本，内容比屏幕长，所以整块可滚动，并且允许选中复制——把某段
+/// 条款贴到别处是常见需求。
+class _LicenseDialog extends StatelessWidget {
+  const _LicenseDialog({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context).size;
+    return Dialog(
+      backgroundColor: PavlColors.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 680,
+          maxHeight: media.height * 0.78,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '许可',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '关闭',
+                    icon: const Icon(Icons.close, size: 20),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 18),
+                child: SelectableText(
+                  text,
+                  style: const TextStyle(fontSize: 12.5, height: 1.6),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

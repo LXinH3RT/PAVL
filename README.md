@@ -40,7 +40,7 @@ PAVL 把这件事拆成两半：
 | **字幕** | 内嵌轨与同目录外挂字幕自动匹配，主干名 + 集数优先后按相似度兜底；ASS 富文本样式照常渲染 |
 | **进度** | 两种模式：只记本机，或跨设备同步（同一账号在不同机器上接着看）；列表上显示进度与百分比 |
 | **续播** | 重新打开时提示上次位置，「从头开始」或「继续播放」 |
-| **设置** | 独立设置页，左侧分「播放 / 音轨与字幕 / 本机 / 服务器 / 关于与排查」五类，窗口变窄时目录收到顶部 |
+| **设置** | 独立设置页，左侧分「播放 / 关于」两类，窗口变窄时目录收到顶部 |
 | **便携** | 服务端与 Windows 客户端的数据、日志、临时文件都落在程序同级的 `PAVL-data/`，换机器拷走即走；服务端被放进只读目录时自动改用 `%APPDATA%\PAVL` |
 | **托盘** | 服务端常驻通知区域，右键可添加 / 更换 / 停止共享某个目录、查看地址与 PIN，改完立即生效不用重启 |
 | **诊断** | 播放失败时给出原因与日志位置；日志里令牌等敏感字段脱敏 |
@@ -110,7 +110,7 @@ PAVL 把这件事拆成两半：
 `dart run bin/pavl.dart` 这种由解释器启动的进程一律按安装版处理，否则配置会写进 Dart SDK 的
 `bin/` 目录。想临时指定数据目录，设环境变量 `PAVL_DATA_DIR` 即可。
 
-### 音轨与字幕的记忆存在哪
+### 音轨与字幕记忆存在哪
 
 每部片选过的音轨、字幕轨（含手动挑选的外挂字幕）都会记下来，下次打开自动恢复。存放位置跟着
 服务端的形态走：
@@ -135,8 +135,9 @@ PAVL 把这件事拆成两半：
 }
 ```
 
-同一部片在不同机器上各记各的，不跨设备同步。客户端的「音轨与字幕」设置页里可以看到当前走的是
-哪一条路，并能一键清空这台设备记住的全部记录。
+同一部片在不同机器上各记各的，不跨设备同步。设置 - 播放 - 「音轨与字幕记忆」管的是要不要记，
+下面的「配置存储位置」直接写明这些选择跟着谁走：便携版服务端显示「跟随本机客户端目录」，
+安装版显示「跟随“服务器名”目录」。
 
 形态由 `/api/v1/info` 的 `storage` 字段告诉客户端，值为 `portable` 或 `installed`；老版本服务端
 没有这个字段，按便携处理（行为与升级前一致）。
@@ -173,6 +174,7 @@ PAVL/
 │  ├─ lib/player/              播放控制封装
 │  ├─ lib/ui/                  连接、浏览、片库、播放、设置、配对
 │  ├─ lib/util/                日志、平台差异
+│  ├─ assets/LICENSE.txt       许可全文（打进包内，设置页「关于 → 许可」直接读它）
 │  ├─ assets/fonts/            界面字体与许可
 │  ├─ windows/                 Windows 平台工程
 │  └─ macos/                   macOS 平台工程
@@ -196,7 +198,7 @@ dart compile exe bin/pavl.dart -o ../build/pavl.exe
 python scripts/setup_media_kit_deps.py    # 预置 libmpv 与 ANGLE
 cd client
 flutter pub get
-flutter build windows --release --dart-define=PAVL_VERSION=0.2.2
+flutter build windows --release --dart-define=PAVL_VERSION=0.2.3
 ```
 
 `setup_media_kit_deps.py` 会把 media_kit 需要的 libmpv / ANGLE 预编译包下载到指定位置，避免
@@ -207,7 +209,7 @@ CMake 在构建时联网下载失败。国内网络下这一步尤其必要。
 ```
 cd client
 flutter pub get
-flutter build macos --release --dart-define=PAVL_VERSION=0.2.2
+flutter build macos --release --dart-define=PAVL_VERSION=0.2.3
 ```
 
 版本号写在 `pubspec.yaml` 里，但 Flutter 不会把它编进代码，所以设置页的「关于」要显示版本时
@@ -287,6 +289,10 @@ MiSans（Apache 2.0）都要求再分发时随附版权声明，而用户拿到�
 ## 许可
 
 代码为本项目原创，按 MIT 许可证发布，见 [LICENSE](LICENSE)。
+
+同一份全文也随客户端打进包里（`client/assets/LICENSE.txt`），设置页的「关于 → 许可」直接读它
+并弹窗显示，因此不依赖安装目录里是否还留着 `LICENSE.txt`。`scripts/package.py` 在打包前会
+校验这两份逐字节一致。
 
 客户端内含的第三方组件：
 

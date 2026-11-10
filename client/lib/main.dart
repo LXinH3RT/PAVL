@@ -17,7 +17,7 @@ import 'util/app_log.dart';
 /// 目录写文件。有些机器上 TEMP/TMP 没配好，Windows 回退到 `C:\WINDOWS\TEMP`，
 /// 普通用户没有写权限，结果就是任何片都打不开、只报一句「拒绝访问」。
 /// 覆盖之后临时文件落在 exe 同级的 `PAVL-data/temp/`，与机器环境无关。
-class _PortableIOOverrides extends IOOverrides {
+final class _PortableIOOverrides extends IOOverrides {
   @override
   Directory getSystemTempDirectory() => appTempDir();
 }

@@ -284,10 +284,14 @@ Future<void> _removeRootAt(
   final root = config.roots.removeAt(index);
   await store.save(config);
   await _afterRootsChanged(server);
+  // 提示里只报「还剩几个在共享」。原来写「还可以共享 N 个目录」，
+  // 中文读起来像在说配额上限，其实共享目录个数不限，只是每停一个就少一个。
+  final remaining = config.roots.length;
   await _showMessageAsync(
-    config.roots.isEmpty
-        ? '已停止共享：\n${root.path}\n\n现在没有任何共享目录了，客户端会看到空列表。'
-        : '已停止共享：\n${root.path}\n\n还可以共享 ${config.roots.length} 个目录。',
+    remaining == 0
+        ? '已停止共享：\n${root.path}\n\n已经没有共享目录了，客户端会看到空列表。'
+        : '已停止共享：\n${root.path}\n\n当前仍在共享 $remaining 个目录：'
+            '${config.roots.map((r) => r.displayName).join('、')}',
   );
 }
 
