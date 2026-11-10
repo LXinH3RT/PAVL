@@ -66,14 +66,20 @@ Future<void> _waitForTiles(WidgetTester tester) async {
 }
 
 /// 当前界面上所有能点的行：散放视频、展开后的各集、文件夹。
+///
+/// 用一个 predicate 取而不是分两次取再拼接：两次 `widgetList` 会按类型各走
+/// 一遍树，拼出来的顺序永远是「所有视频在前、所有文件夹在后」，与界面上的
+/// 真实顺序不符。一次 predicate 遍历才保持深度优先的树序。
 List<String> _visibleNames(WidgetTester tester) {
   final names = <String>[];
-  for (final tile in tester.widgetList<LibraryTile>(find.byType(LibraryTile))) {
-    names.add(tile.entry.displayTitle);
-  }
-  for (final tile
-      in tester.widgetList<LibraryGroupTile>(find.byType(LibraryGroupTile))) {
-    names.add(tile.group.name);
+  for (final widget in tester.widgetList(
+    find.byWidgetPredicate((w) => w is LibraryTile || w is LibraryGroupTile),
+  )) {
+    if (widget is LibraryTile) {
+      names.add(widget.entry.displayTitle);
+    } else if (widget is LibraryGroupTile) {
+      names.add(widget.group.name);
+    }
   }
   return names;
 }
