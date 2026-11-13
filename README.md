@@ -163,7 +163,7 @@ PAVL 把这件事拆成两半：
 
 | 来源 | 检索 | 详情 | 说明 |
 |-|-|-|-|
-| 豆瓣 | `movie.douban.com/j/subject_suggest` | `m.douban.com/rexxar/api/v2` | 中文信息最全，海报与简介都有；网页版有验证页拦截，只能用接口 |
+| 豆瓣 | `m.douban.com/rexxar/api/v2/search/subjects` | `m.douban.com/rexxar/api/v2` | 中文信息最全，海报与简介都有；网页版有验证页拦截，只能用接口。另有 `subject_suggest` 与 `search_suggest` 两个接口做兜底 |
 | IMDb | `v2.sg.media-imdb.com/suggestion/x` | `v3-cinemeta.strem.io` | 英文名、评分与简介；imdb.com 本体对脚本请求不返回内容 |
 | B站 | `api.bilibili.com/x/web-interface/search/all/v2` | 同上回查 | 适合国产片与在 B 站有投稿的内容，条目本身是视频而不是影片 |
 
@@ -178,8 +178,13 @@ PAVL 把这件事拆成两半：
 读取展示。一部剧只抓一次，按文件夹路径共享给它的每一集，所以换集标记时不用重新刮。客户端
 设置里的「显示刮削信息」是纯显示开关：关掉后这台设备不再显示海报与评分，服务端记录不受影响。
 
-**限速**。豆瓣 1200ms、B 站 400ms、IMDb 250ms 一次，同一次运行内按来源串行。自动刮削在后台
+**限速**。豆瓣 2000ms、B 站 400ms、IMDb 250ms 一次，同一次运行内按来源串行。自动刮削在后台
 跑，进度不影响浏览。
+
+豆瓣按 IP 限流，连发几次就会被挡，被挡时检索接口返回空或 403，详情接口仍然正常。所以豆瓣的
+检索是三接口串联（上表的 rexxar search 优先，`subject_suggest`、`search_suggest` 兜底），拿到
+非空结果就用；三个都空时才把最先遇到的错误报出来，界面上能看到「哪个来源失败了、为什么」，
+而不是装作没搜到。
 
 ## 目录
 

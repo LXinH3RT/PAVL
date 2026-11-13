@@ -884,11 +884,13 @@ class PavlServer {
     }
     final kind = ScrapeKind.parse(query['kind']);
     final year = int.tryParse(query['year'] ?? '');
+    final season = int.tryParse(query['season'] ?? '');
     final only = ScrapeSource.parse(query['source']);
     final result = await scrapeEngine.search(
       keyword,
       kind: kind == ScrapeKind.unknown ? null : kind,
       year: year,
+      season: season,
       sources: only == null ? null : [only],
     );
     await _sendJson(request, HttpStatus.ok, result.toJson());

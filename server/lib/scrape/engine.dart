@@ -138,6 +138,7 @@ class ScrapeEngine {
     String keyword, {
     ScrapeKind? kind,
     int? year,
+    int? season,
     List<ScrapeSource>? sources,
   }) async {
     final query = keyword.trim();
@@ -168,6 +169,7 @@ class ScrapeEngine {
           candidates: candidates,
           expectedYear: year,
           expectedKind: kind,
+          expectedSeason: season,
         ));
       } on Object catch (error) {
         failures[source.wireName] = _briefError(error);
@@ -286,7 +288,8 @@ class ScrapeEngine {
           continue;
         }
         try {
-          final found = await search(query, kind: group.kind, year: group.year);
+          final found = await search(query,
+              kind: group.kind, year: group.year, season: group.season);
           final best = found.matches.isEmpty ? null : found.matches.first;
           if (best == null || !best.strong) {
             report.skipped++;
@@ -358,12 +361,13 @@ class ScrapeEngine {
 
   /// 同一个来源的两次请求之间至少隔这么久。
   ///
-  /// 豆瓣最敏感：实测 0.3 秒间隔就会被拦，这里保守取 1.2 秒。IMDb 与 B站 的
-  /// 接口是 CDN 上的静态 JSON，快一点没关系。
+  /// 豆瓣最敏感：实测 0.3 秒连发几次就会被拦，2 秒间隔通过率约 5/6，这里取
+  /// 2 秒——自动刮削在后台跑，慢一点没有关系，被拦了要等几分钟才恢复才
+  /// 是真麻烦。IMDb 与 B站 的接口是 CDN 上的静态 JSON，快一点没关系。
   static Duration _intervalOf(ScrapeSource source) {
     switch (source) {
       case ScrapeSource.douban:
-        return const Duration(milliseconds: 1200);
+        return const Duration(milliseconds: 2000);
       case ScrapeSource.bilibili:
         return const Duration(milliseconds: 400);
       case ScrapeSource.imdb:
@@ -436,6 +440,7 @@ class ScrapeFolder {
     this.query = '',
     this.kind,
     this.year,
+    this.season,
   });
 
   /// 显示名，用于日志。
@@ -450,6 +455,11 @@ class ScrapeFolder {
   final ScrapeKind? kind;
   final int? year;
 
+  /// 本地文件属于第几季。
+  ///
+  /// 来源把每一季拆成独立条目，没有这个值就分不出「第五季」与「第一季」。
+  final int? season;
+
   /// 从一个文件夹或文件名构造。
   static ScrapeFolder of({
     required String name,
@@ -461,10 +471,12 @@ class ScrapeFolder {
     // 剧集在文件名里能看出季集，文件夹名看不出，所以类型只能从文件名推。
     ScrapeKind? kind;
     int? year;
+    int? season;
     if (paths.isNotEmpty) {
       final parsed = parseFileName(_baseNameOf(paths.first));
       if (parsed.isEpisode) kind = ScrapeKind.tv;
       year = parsed.year;
+      season = parsed.season;
     }
     return ScrapeFolder(
       name: name,
@@ -472,6 +484,7 @@ class ScrapeFolder {
       query: query,
       kind: kind,
       year: year,
+      season: season,
     );
   }
 

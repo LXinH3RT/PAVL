@@ -130,7 +130,7 @@ Three sources, each independently selectable:
 
 | Source | Search | Details | Notes |
 |-|-|-|-|
-| Douban | `movie.douban.com/j/subject_suggest` | `m.douban.com/rexxar/api/v2` | The most complete Chinese metadata, poster and synopsis included; the web pages sit behind a verification wall, only the API works |
+| Douban | `m.douban.com/rexxar/api/v2/search/subjects` | `m.douban.com/rexxar/api/v2` | The most complete Chinese metadata, poster and synopsis included; the web pages sit behind a verification wall, only the API works. `subject_suggest` and `search_suggest` serve as fallbacks |
 | IMDb | `v2.sg.media-imdb.com/suggestion/x` | `v3-cinemeta.strem.io` | English titles, rating and synopsis; imdb.com itself returns nothing to scripted requests |
 | Bilibili | `api.bilibili.com/x/web-interface/search/all/v2` | same endpoint, looked up by id | Best for Chinese productions and anything uploaded there; entries are videos rather than films |
 
@@ -150,8 +150,14 @@ folder, so marking episodes does not trigger another round. The client's “Show
 display-only toggle: turning it off hides posters and ratings on that device while the server records
 stay untouched.
 
-**Rate limits.** One request per 1200 ms for Douban, 400 ms for Bilibili and 250 ms for IMDb, serialised
+**Rate limits.** One request per 2000 ms for Douban, 400 ms for Bilibili and 250 ms for IMDb, serialised
 per source within a run. Automatic matching happens in the background and does not block browsing.
+
+Douban throttles by IP: a burst of requests gets blocked, and while blocked the search endpoints return
+nothing or 403 even though the details endpoint keeps working. Douban search therefore tries three
+endpoints in order (the rexxar search above first, then `subject_suggest` and `search_suggest`) and takes
+the first non-empty answer. Only when all three come back empty is the first error reported, so the UI can
+say which source failed and why instead of pretending nothing was found.
 
 ### Where the data lives
 

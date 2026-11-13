@@ -9,7 +9,7 @@ import 'models.dart';
 /// 刮削的配置。
 class ScrapeSettings {
   const ScrapeSettings({
-    this.enabled = true,
+    this.enabled = false,
     this.autoMatch = true,
     this.sources = defaultSources,
   });
@@ -25,9 +25,10 @@ class ScrapeSettings {
 
   /// 是否允许服务端联网刮削。
   ///
-  /// 关掉之后服务端不再发起任何外部请求，已经刮到的记录仍然能读能显示。
-  /// 这是服务端自己的开关：客户端那边还有一个「用不用刮削」的显示开关，
-  /// 两个都打开才会看到海报与评分。
+  /// 默认关：刮削要替用户去外部站点抓数据，不打招呼就发请求不合适，得由人
+  /// 在设置里显式打开。关掉之后服务端不再发起任何外部请求，已经刮到的记录
+  /// 仍然能读能显示。客户端那边还有一个「显示刮削信息」的显示开关，两个都
+  /// 打开才会看到海报与评分。
   final bool enabled;
 
   /// 是否在刷新片库后自动匹配。
@@ -67,7 +68,7 @@ class ScrapeSettings {
       }
     }
     return ScrapeSettings(
-      enabled: raw['enabled'] is bool ? raw['enabled']! as bool : true,
+      enabled: raw['enabled'] is bool ? raw['enabled']! as bool : false,
       autoMatch: raw['autoMatch'] is bool ? raw['autoMatch']! as bool : true,
       sources: sources.isEmpty ? defaultSources : sources,
     );

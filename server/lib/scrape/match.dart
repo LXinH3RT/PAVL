@@ -73,10 +73,15 @@ List<ScrapeMatch> rankCandidates({
   required List<ScrapeCandidate> candidates,
   int? expectedYear,
   ScrapeKind? expectedKind,
+  int? expectedSeason,
   int limit = 8,
 }) {
   final normalizedQuery = _normalize(query);
   if (normalizedQuery.isEmpty) return const [];
+  // 关键词里本身就写着季号时（`绝命毒师 第一季`）以它为准：规范化会把季号
+  // 剥掉，不先记下来，几季的标题就变得一模一样、分数也一模一样，排序只能
+  // 靠「季号最小」兜底，本地是第一季以外的季时就会配错。
+  final season = expectedSeason ?? _seasonOfTitle(query);
   final matches = <ScrapeMatch>[];
   for (final candidate in candidates) {
     final score = _scoreOf(
@@ -84,6 +89,7 @@ List<ScrapeMatch> rankCandidates({
       candidate: candidate,
       expectedYear: expectedYear,
       expectedKind: expectedKind,
+      expectedSeason: season,
     );
     if (score <= 0) continue;
     matches.add(ScrapeMatch(
@@ -94,13 +100,19 @@ List<ScrapeMatch> rankCandidates({
     ));
   }
   // 同分时先比季号：同一个分数的多半是同一部剧的几季（豆瓣每一季都是独立
-  // 条目），拿第一季当代表，海报与简介才是整部剧的印象而不是最终季。
+  // 条目）。知道本地是哪一季就按那个季度挑，否则拿第一季当代表——海报与简介
+  // 才是整部剧的印象而不是最终季。
   matches.sort((a, b) {
     final byScore = b.score.compareTo(a.score);
     if (byScore != 0) return byScore;
     final aSeason = _seasonOf(a.candidate);
     final bSeason = _seasonOf(b.candidate);
     if (aSeason != bSeason) {
+      if (season != null) {
+        final aHit = aSeason == season;
+        final bHit = bSeason == season;
+        if (aHit != bHit) return aHit ? -1 : 1;
+      }
       if (aSeason == null) return 1;
       if (bSeason == null) return -1;
       return aSeason.compareTo(bSeason);
@@ -129,7 +141,10 @@ List<ScrapeMatch> _demoteAmbiguous(List<ScrapeMatch> matches) {
   if (matches[1].score != top) return matches;
   final firstSeason = _seasonOf(matches.first.candidate);
   final secondSeason = _seasonOf(matches[1].candidate);
-  if (firstSeason != null && secondSeason != null) return matches;
+  if (firstSeason != null && secondSeason != null) {
+    // 两条都是剧集：不同季已经从上面排过序，同季才是真的要人挑。
+    if (firstSeason != secondSeason) return matches;
+  }
 
   final years = <int>{};
   for (final match in matches) {
@@ -153,8 +168,11 @@ List<ScrapeMatch> _demoteAmbiguous(List<ScrapeMatch> matches) {
 }
 
 /// 候选标题里的季号，解析不出就是 null。
-int? _seasonOf(ScrapeCandidate candidate) {
-  final season = parseFileName(candidate.title).season;
+int? _seasonOf(ScrapeCandidate candidate) => _seasonOfTitle(candidate.title);
+
+/// 任意标题（候选标题、片名、文件夹名）里的季号，解析不出就是 null。
+int? _seasonOfTitle(String title) {
+  final season = parseFileName(title).season;
   return (season != null && season > 0) ? season : null;
 }
 
@@ -169,6 +187,7 @@ int _scoreOf({
   required ScrapeCandidate candidate,
   int? expectedYear,
   ScrapeKind? expectedKind,
+  int? expectedSeason,
 }) {
   final titles = <String>[
     _normalize(candidate.title),
@@ -200,6 +219,16 @@ int _scoreOf({
   } else if (year != null) {
     // 查询里没年份时，有年份的候选稍微加分：它至少是个结构完整的条目。
     best += 5;
+  }
+
+  // 季号对上再加一层。豆瓣把每一季都拆成独立条目，同一部剧的几季标题几乎
+  // 一样，只靠标题分数永远分不开：本地是第五季，拿第一季的海报与简介就是
+  // 错的。季号对不上时扣得比加分更狠，直接把这一条压到强命中线下。
+  if (expectedSeason != null) {
+    final season = _seasonOf(candidate);
+    if (season != null) {
+      best += season == expectedSeason ? 25 : -45;
+    }
   }
 
   // 类型对上了加分。剧集与电影的界面差异很大，配错类型会让「集数」显示成

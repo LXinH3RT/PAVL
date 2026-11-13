@@ -44,15 +44,28 @@ class _Cached {
 /// 详情页也可能被界面反复打开。给一个几分钟的短缓存，用户来回点的时候就不
 /// 会每次都打对方服务器——这既是礼貌，也是避免被限流的手段。
 class ScrapeHttp implements ScrapeHttpLike {
-  ScrapeHttp({this.timeout = const Duration(seconds: 10), this.cacheTtl = const Duration(minutes: 30)});
+  ScrapeHttp({
+    this.timeout = const Duration(seconds: 8),
+    this.imageTimeout = const Duration(seconds: 60),
+    this.cacheTtl = const Duration(minutes: 30),
+  });
 
-  /// 单次请求的超时。
+  /// JSON 接口请求的超时。
+  ///
+  /// 实测最慢的一条是 IMDb 的剧集详情（39 KB，2 秒左右，偶发 3.4 秒），8 秒
+  /// 留了余量又不至于卡住整个刮削队列。
   final Duration timeout;
+
+  /// 图片请求的超时。
+  ///
+  /// 图片单独放宽到 60 秒是有实据的：metahub 的大海报、amazon 的原图在 5 秒
+  /// 内下不完，用接口的超时去下图片会稳定截断成半张。
+  final Duration imageTimeout;
 
   /// 成功响应的缓存时长。
   final Duration cacheTtl;
 
-  final HttpClient _client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+  final HttpClient _client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
 
   final Map<String, _Cached> _cache = {};
 
@@ -108,7 +121,7 @@ class ScrapeHttp implements ScrapeHttpLike {
     Map<String, String> headers = const {},
   }) async {
     final merged = <String, String>{...headers};
-    final request = await _open(url, merged, accept: 'image/*');
+    final request = await _open(url, merged, accept: 'image/*', timeout: imageTimeout);
     try {
       final response = await request.close();
       if (response.statusCode != HttpStatus.ok) {
@@ -156,10 +169,11 @@ class ScrapeHttp implements ScrapeHttpLike {
     String url,
     Map<String, String> headers, {
     String? accept,
+    Duration? timeout,
   }) async {
     _requestCount++;
     final uri = Uri.parse(url);
-    final request = await _client.getUrl(uri).timeout(timeout);
+    final request = await _client.getUrl(uri).timeout(timeout ?? this.timeout);
     request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
     if (accept != null) request.headers.set(HttpHeaders.acceptHeader, accept);
     request.headers.set(HttpHeaders.acceptEncodingHeader, 'gzip');

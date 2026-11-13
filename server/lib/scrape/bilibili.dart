@@ -5,10 +5,14 @@
 /// 可能被切成几十段，也可能根本没人上传），所以 B站 只作为「补充来源」：
 /// 能查到就给出封面与简介，查不到不影响刮削结果。
 ///
-/// 接口方面，`api.bilibili.com/x/web-interface/search/type` 对非浏览器请求
-/// 一律回 412（风控），带 cookie 也未必通；可用的是 `search/all/v2`，它只要
-/// 求一个 `Referer`，搜索结果里已经带了标题、封面、简介、时长与 UP 主，足够
-/// 拼出一个候选。
+/// 接口方面有两个反直觉的地方，都是实测出来的：
+///
+///   1. `search/type` 对非浏览器请求会随机 412（风控），但 `search/all/v2`
+///      不需要任何请求头就能用，反过来带 `Referer` 也不影响它；
+///   2. `view`（详情）**不能带 `Referer`**——带上稳定 412，去掉反而 200。
+///
+/// 所以搜索与详情用两套请求头：搜索什么都不带，详情只带 UA（由 HTTP 层统一
+/// 加）。详情能拿到简介、封面、时长、发布日期与 UP 主，比回查搜索可靠得多。
 library;
 
 import 'models.dart';
@@ -21,11 +25,11 @@ class BilibiliProvider extends ScrapeProvider {
   @override
   ScrapeSource get source => ScrapeSource.bilibili;
 
-  /// B站 的接口要求 Referer 是自家站点，否则直接 412。
-  static const Map<String, String> _headers = {
-    'Referer': 'https://www.bilibili.com/',
-    'Origin': 'https://www.bilibili.com',
-  };
+  /// 详情接口：**不要**带 `Referer`。
+  ///
+  /// 带上 `Referer: https://www.bilibili.com/` 时 `view` 稳定回 412，去掉就
+  /// 200，这是实测三次都一致的行为，不是偶发风控。
+  static const Map<String, String> _detailHeaders = {};
 
   /// 返回结果里最多取几条。
   ///
@@ -39,7 +43,7 @@ class BilibiliProvider extends ScrapeProvider {
     if (query.isEmpty) return const [];
     final url = 'https://api.bilibili.com/x/web-interface/search/all/v2'
         '?keyword=${Uri.encodeQueryComponent(query)}';
-    final decoded = await http.getJson(url, headers: _headers);
+    final decoded = await http.getJson(url);
     if (decoded is! Map) return const [];
     // code 不是 0 说明被风控或参数不对，这时按「没有结果」处理，别抛异常：
     // B站 只是补充源，失败不该让整次刮削失败。
@@ -80,8 +84,38 @@ class BilibiliProvider extends ScrapeProvider {
   @override
   Future<ScrapeDetail> detail(String id,
       {ScrapeKind kind = ScrapeKind.unknown}) async {
-    // 详情接口 `x/web-interface/view` 对非浏览器请求回 412，实测拿不到，所以
-    // 这里改用 search 回查：用 BV 号当关键词能命中那一条，字段也够用。
+    final url = 'https://api.bilibili.com/x/web-interface/view'
+        '?bvid=${Uri.encodeQueryComponent(id)}';
+    final decoded = await http.getJson(url, headers: _detailHeaders);
+    if (decoded is Map && decoded['code'] == 0 && decoded['data'] is Map) {
+      final data = (decoded['data'] as Map).cast<String, Object?>();
+      final title = _str(data['title']);
+      if (title != null) {
+        final owner = data['owner'];
+        final author = owner is Map ? _str(owner['name']) : null;
+        final seconds = _int(data['duration']);
+        return ScrapeDetail(
+          source: wireName,
+          id: id,
+          title: title,
+          poster: _posterOf(_str(data['pic'])),
+          // `desc` 全是短横线的占位时当成没有。
+          intro: _introOf(_str(data['desc'])),
+          genres: [_str(data['tname_v2']), _str(data['tname'])]
+              .whereType<String>()
+              .where((t) => t.isNotEmpty)
+              .toList(),
+          durations: seconds == null || seconds <= 0
+              ? const []
+              : ['${(seconds / 60).ceil()} 分钟'],
+          directors: author == null ? const [] : [author],
+          releaseDate: _dateOf(_int(data['pubdate'])),
+          kind: ScrapeKind.unknown,
+        );
+      }
+    }
+    // 详情拿不到时退回 search 回查：用 BV 号当关键词能命中那一条，至少还有
+    // 封面与标题，比整条失败强。
     final candidates = await search(id);
     for (final candidate in candidates) {
       if (candidate.id != id) continue;
@@ -97,10 +131,37 @@ class BilibiliProvider extends ScrapeProvider {
     throw StateError('B站详情取不到：$id');
   }
 
-  /// B站 的封面地址以 `//` 开头，补上 https。
+  /// `desc` 只有一串短横线或者「-」时视为没有简介。
+  static String? _introOf(String? desc) {
+    if (desc == null) return null;
+    final stripped = desc.replaceAll(RegExp(r'[-—\s]'), '');
+    return stripped.isEmpty ? null : desc;
+  }
+
+  /// 秒级时间戳转 `yyyy-MM-dd`。
+  static String? _dateOf(int? seconds) {
+    if (seconds == null || seconds <= 0) return null;
+    final date = DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '${date.year}-$month-$day';
+  }
+
+  static int? _int(Object? value) {
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    if (value is String) return int.tryParse(value.trim());
+    return null;
+  }
+
+  /// B站 的封面地址有 `//` 与 `http://` 两种写法，统一升到 https。
+  ///
+  /// 搜索接口回 `//i0.hdslb.com/...`，详情接口回 `http://i0.hdslb.com/...`，
+  /// 两者都能下，但明文地址在部分平台会被拦，这里一并改写成 https。
   static String? _posterOf(String? raw) {
     if (raw == null) return null;
     if (raw.startsWith('//')) return 'https:$raw';
+    if (raw.startsWith('http://')) return 'https://${raw.substring(7)}';
     return raw;
   }
 
