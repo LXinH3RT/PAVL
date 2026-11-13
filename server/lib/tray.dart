@@ -32,6 +32,7 @@ abstract final class TrayCommand {
   static const int openBrowser = 1004;
   static const int addRoot = 1005;
   static const int changeRoots = 1006;
+  static const int checkUpdate = 1007;
   static const int exit = 1099;
 
   /// 移除某个共享目录的命令号起点。

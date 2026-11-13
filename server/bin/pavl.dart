@@ -20,10 +20,15 @@ import 'package:pavl_server/config.dart';
 import 'package:pavl_server/native_dialogs.dart';
 import 'package:pavl_server/pavl_server.dart' as pavl;
 import 'package:pavl_server/tray.dart';
+import 'package:pavl_server/update.dart' as upd;
 
 Future<void> main(List<String> args) async {
   // 托盘图标要按物理像素挑帧，所以进程启动时就声明 DPI 感知。
   enableDpiAwareness();
+
+  // 自己更新时新本体是被旧进程拉起来的，只负责铺文件、换启动目录，不起服务。
+  if (await upd.applyPendingIfRequested(args)) return;
+
   final options = _parseArgs(args);
   if (options == null) {
     _printUsage();
@@ -33,6 +38,11 @@ Future<void> main(List<String> args) async {
 
   final store = ConfigStore.defaultStore();
   final config = await store.load();
+
+  // 上次更新可能留下改名后的旧文件和解压产物，启动时清一次。
+  // 下载中的 zip 不动，那是断点续传的依据。
+  upd.cleanStaleFiles(File(Platform.resolvedExecutable).parent.path);
+  upd.cleanStaleUpdateDirs(store.file.parent.path);
 
   if (options.printConfig) {
     stdout.writeln(_describe(config, store.file.path));
@@ -161,6 +171,7 @@ Future<void> main(List<String> args) async {
         TrayMenuItem(TrayCommand.changeRoots, '更换共享目录…'),
         TrayMenuItem.separator(),
         TrayMenuItem(TrayCommand.regeneratePin, '重新生成 PIN（旧设备需重新配对）'),
+        TrayMenuItem(TrayCommand.checkUpdate, '版本 v${pavl.pavlVersion} · 检查更新'),
         TrayMenuItem.separator(),
         TrayMenuItem(TrayCommand.exit, '退出'),
       ],
@@ -248,6 +259,8 @@ Future<void> _handleTrayCommand(
       config.pin = _generatePin();
       await store.save(config);
       await server.reloadAuth();
+    case TrayCommand.checkUpdate:
+      await _checkUpdate(config, store);
     case TrayCommand.exit:
       _shutdown?.call();
     default:
@@ -319,6 +332,98 @@ Future<void> _showMessageAsync(
   } on Object {
     // 提示框弹不出来不影响主流程。
   }
+}
+
+/// 弹一是/否确认框。同样放到独立 isolate，避免卡住 HTTP 服务。
+Future<bool> _askConfirmAsync(
+  String text, {
+  String caption = 'PAVL',
+  bool isWarning = false,
+}) async {
+  try {
+    return await Isolate.run(
+      () => askConfirm(text, caption: caption, isWarning: isWarning),
+    );
+  } on Object {
+    return false;
+  }
+}
+
+/// 检查更新：查 GitHub，有新版本就问一句，再下载并交给新本体接管。
+///
+/// 全程只有两个阻塞提示（结果 + 确认），网络请求在主 isolate 上跑。
+Future<void> _checkUpdate(ServerConfig config, ConfigStore store) async {
+  final dataDir = store.file.parent.path;
+  upd.ReleaseInfo release;
+  try {
+    release = await upd.fetchLatestRelease();
+  } on upd.UpdateException catch (error) {
+    await _showMessageAsync(
+      '检查更新失败：\n${error.message}',
+      caption: 'PAVL 检查更新',
+      isError: true,
+    );
+    return;
+  }
+
+  if (!upd.isNewerVersion(release.version)) {
+    await _showMessageAsync(
+      '已经是最新版本。\n\n当前 v${pavl.pavlVersion}，最新 ${release.version}。',
+      caption: 'PAVL 检查更新',
+    );
+    return;
+  }
+
+  final asset = release.serverAsset;
+  if (asset == null) {
+    await _showMessageAsync(
+      '最新版本是 ${release.version}，但这个版本没有服务端的包。\n\n'
+      '去发布页看看：${upd.releasesPageUrl}',
+      caption: 'PAVL 检查更新',
+      isError: true,
+    );
+    return;
+  }
+
+  final go = await _askConfirmAsync(
+    '发现新版本 ${release.version}（当前 v${pavl.pavlVersion}）。\n\n'
+    '更新包：${asset.name}（${asset.sizeText}）\n'
+    '更新会重启服务端，已配对的设备不用重新配对。\n\n'
+    '现在下载并更新吗？',
+    caption: 'PAVL 检查更新',
+  );
+  if (!go) return;
+
+  File zip;
+  try {
+    zip = await upd.downloadAsset(asset, dataDir: dataDir);
+  } on upd.UpdateException catch (error) {
+    await _showMessageAsync(
+      '下载失败：\n${error.message}',
+      caption: 'PAVL 更新失败',
+      isError: true,
+    );
+    return;
+  }
+
+  try {
+    await upd.beginApply(
+      zip: zip,
+      version: release.version,
+      dataDir: dataDir,
+      installRoot: File(Platform.resolvedExecutable).parent.path,
+    );
+  } on upd.UpdateException catch (error) {
+    await _showMessageAsync(
+      '准备更新失败：\n${error.message}',
+      caption: 'PAVL 更新失败',
+      isError: true,
+    );
+    return;
+  }
+
+  // 新本体已经在等这个位置了，退出让位。
+  _shutdown?.call();
 }
 
 /// 追加一个共享目录。

@@ -20,6 +20,7 @@ import '../store/app_store.dart';
 import '../util/app_log.dart';
 import '../util/build_info.dart';
 import '../util/platform_support.dart';
+import 'update_dialog.dart';
 
 /// 随包分发的许可证文件。
 ///
@@ -321,8 +322,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       case SettingsTab.about:
         return [
           const _SectionTitle('应用'),
-          _KvTile(label: '客户端版本', value: appVersion),
-          _KvTile(label: '服务端版本', value: _serverVersionText),
+          _KvTile(
+            label: '客户端版本',
+            value: appVersion,
+            hint: '点击检查本地更新',
+            onTap: () => showUpdateDialog(context),
+          ),
+          _KvTile(
+            label: '服务端版本',
+            value: _serverVersionText,
+            hint: '服务端更新在它自己的托盘菜单里',
+          ),
           ListTile(
             title: const Text('许可'),
             subtitle: const Text('PAVL 与第三方组件的许可条款'),
@@ -844,15 +854,26 @@ class _TabTile extends StatelessWidget {
 ///
 /// 设备 ID、数据目录这类东西是给排查用的，用户要能把它们贴到聊天窗口里，
 /// 所以用 [SelectableText] 而不是普通 [Text]。
+///
+/// 传了 [onTap] 就整行可点并显示一个右箭头——版本号那两行靠它进更新检查。
 class _KvTile extends StatelessWidget {
-  const _KvTile({required this.label, required this.value});
+  const _KvTile({
+    required this.label,
+    required this.value,
+    this.onTap,
+    this.hint,
+  });
 
   final String label;
   final String value;
+  final VoidCallback? onTap;
+
+  /// 值下面的一行小字，只在可点时用得上。
+  final String? hint;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    final row = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -868,13 +889,36 @@ class _KvTile extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: SelectableText(
-              value,
-              style: const TextStyle(fontSize: 13, height: 1.4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(
+                  value,
+                  style: const TextStyle(fontSize: 13, height: 1.4),
+                ),
+                if (hint != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      hint!,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: PavlColors.textDim,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
+          if (onTap != null)
+            const Padding(
+              padding: EdgeInsets.only(left: 8, top: 2),
+              child: Icon(Icons.chevron_right, size: 20),
+            ),
         ],
       ),
     );
+    if (onTap == null) return row;
+    return InkWell(onTap: onTap, child: row);
   }
 }

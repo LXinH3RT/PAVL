@@ -51,6 +51,7 @@ Which formats play is a property of the client, not of the server.
 | **Settings** | A dedicated page with two sections down the left: playback, about. The rail moves to the top when the window narrows; the scraping switches sit in the lower half of Playback |
 | **Portable** | Both the server and the Windows client keep data, logs and temporary files in a `PAVL-data/` folder next to the executable, so copying the folder is enough. If the server ends up in a read-only location it falls back to `%APPDATA%\PAVL` |
 | **Tray** | The server lives in the notification area; right-click to add or change shared folders, stop sharing one of them, and to read the address and PIN. Changes take effect immediately without a restart |
+| **Updates** | The client version row in Settings → About and the version entry in the server tray menu can both be clicked to check the latest GitHub release; the download is applied in place and a restart picks it up, keeping pairing, progress and the library index |
 | **Diagnostics** | Playback failures report a reason and the log location; sensitive fields such as tokens are redacted |
 
 ## Screens
@@ -159,6 +160,30 @@ endpoints in order (the rexxar search above first, then `subject_suggest` and `s
 the first non-empty answer. Only when all three come back empty is the first error reported, so the UI can
 say which source failed and why instead of pretending nothing was found.
 
+### Updates
+
+The client version row in Settings → About and the version entry in the server tray menu can be
+clicked, which fetches the latest release from GitHub and compares it with the running version. A
+newer release can be downloaded and applied in place; after a restart it is the running version,
+with pairing, playback progress and the library index left where they were.
+
+Packages are chosen per platform: `PAVL_windows_client_portable_<version>.zip` for the Windows
+client, `PAVL_windows_server_portable_<version>.zip` for the Windows server and
+`PAVL_macos_client_<version>.zip` for macOS. Downloads use concurrent Range chunks, retry the chunks
+that fail, and resume from what already reached disk when the connection drops entirely.
+
+The replacement step has to be done by the copy of the program that is **currently running**. The
+freshly downloaded executable may not understand `--apply-update` (everything up to 0.2.2 does not),
+so starting it just boots an ordinary server that cannot bind the port and exits without copying a
+single file. The program therefore copies itself into the data directory as a stand-in, which waits
+for the old process to exit and only then lays down the files and starts the new build. On macOS
+Flutter does not pass command-line arguments to `main`, so the same path is taken through an
+environment variable instead.
+
+Windows refuses to overwrite a running executable, so the old one is renamed to `.old` before the
+new one is written and the leftovers are cleaned on the next start; macOS swaps the whole `.app`,
+moving the previous one aside as `<App>.app.old`.
+
 ### Where the data lives
 
 Both sides ask whether the program folder is writable, not whether an installer was used — the server
@@ -223,12 +248,14 @@ PAVL/
 │     ├─ discovery.dart        UDP broadcast discovery
 │     ├─ streaming.dart        HTTP Range file serving
 │     ├─ subtitle_match.dart   Sidecar subtitle matching
+│     ├─ update.dart           Release check, download, extraction and in-place replacement
 │     ├─ native_dialogs.dart   Native folder picker and message boxes
 │     ├─ tray.dart             Tray icon and menu
 │     ├─ tray_icon.dart        Embedded tray icon asset
 │     └─ pavl_server.dart      Routing and authentication
 ├─ client/                     Flutter client (Windows / macOS)
 │  ├─ lib/api/                 HTTP client and LAN discovery
+│  ├─ lib/core/                Update checking, download and in-place replacement
 │  ├─ lib/store/               Local settings and data directory
 │  ├─ lib/player/              Playback controller wrapper
 │  ├─ lib/ui/                  Connect, browse, player, settings, pairing
@@ -362,7 +389,8 @@ icon and the native dialogs.
   asking; if a manual broadcast then finds no server, the client falls back to probing the servers it
   has already paired with, and only then points the user to
   System Settings → Privacy & Security → Local Network.
-* Poster and synopsis support is exposed by the API but not surfaced in the UI.
+* Douban throttles by IP, so a large library may leave some entries unmatched in a single pass; run it again later.
+* The macOS client's updater is implemented but has not been verified on real hardware yet.
 
 ## License
 

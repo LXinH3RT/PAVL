@@ -9,6 +9,8 @@ import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
+import 'core/update_install.dart';
+import 'core/update_service.dart';
 import 'store/app_store.dart';
 import 'util/app_log.dart';
 
@@ -38,13 +40,19 @@ final class _PortableIOOverrides extends IOOverrides {
   Directory getSystemTempDirectory() => appTempDir();
 }
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
+  // 自己更新时新本体是被旧进程拉起来的，只负责铺文件、换启动目录，不建界面。
+  if (await applyPendingIfRequested(args)) return;
+
   WidgetsFlutterBinding.ensureInitialized();
 
   // 必须在任何媒体对象构造之前设好，播放列表第一次创建就会用到。
   IOOverrides.global = _PortableIOOverrides();
 
   logLine('app', '启动，数据目录 ${appDataDir().path}');
+
+  // 上一次更新可能留下改名后的旧文件，顺手清掉。
+  unawaited(cleanStaleFiles());
 
   // libmpv 通过 ffi 加载，必须在创建 Player 之前初始化一次。
   MediaKit.ensureInitialized();

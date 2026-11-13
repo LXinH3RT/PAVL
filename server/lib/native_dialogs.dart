@@ -53,6 +53,25 @@ String? pickFolder({String title = '选择要共享的视频文件夹'}) {
   }
 }
 
+/// 弹一个「是 / 否」确认框，用户点「是」返回 true，其它情况返回 false。
+bool askConfirm(String text, {String caption = 'PAVL', bool isWarning = false}) {
+  if (!Platform.isWindows) return false;
+  final textWide = _toWide(text);
+  final captionWide = _toWide(caption);
+  try {
+    final result = _messageBox(
+      0,
+      textWide,
+      captionWide,
+      _mbYesno | (isWarning ? _mbIconWarning : _mbIconQuestion),
+    );
+    return result == _idYes;
+  } finally {
+    _free(textWide.cast());
+    _free(captionWide.cast());
+  }
+}
+
 /// 弹一个提示框。托盘模式下这是唯一能告诉用户「哪里出错了」的手段。
 void showMessage(String text, {String caption = 'PAVL', bool isError = false}) {
   if (!Platform.isWindows) return;
@@ -74,7 +93,6 @@ void showMessage(String text, {String caption = 'PAVL', bool isError = false}) {
 // ---------------------------------------------------------------------------
 // Win32 绑定
 // ---------------------------------------------------------------------------
-
 const int _coinitApartmentThreaded = 0x2;
 
 const int _bifReturnOnlyFsDirs = 0x00000001;
@@ -82,6 +100,10 @@ const int _bifEditBox = 0x00000010;
 const int _bifNewDialogStyle = 0x00000040;
 
 const int _mbOk = 0x00000000;
+const int _mbYesno = 0x00000004;
+const int _idYes = 6;
+const int _mbIconQuestion = 0x00000020;
+const int _mbIconWarning = 0x00000030;
 const int _mbIconError = 0x00000010;
 const int _mbIconInformation = 0x00000040;
 
