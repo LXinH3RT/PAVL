@@ -141,6 +141,13 @@ class AppStore {
   /// 进度模式：true 用服务端跨设备进度，false 只用本机记录。
   bool crossDeviceProgress = false;
 
+  /// 片库里是否显示刮削到的海报与评分。
+  ///
+  /// 这只是客户端的显示开关，刮削本身在服务端做：服务端关掉刮削之后，即便
+  /// 这里打开也拿不到新数据，只会显示已有记录。默认关闭——很多人的片库是
+  /// 私人收藏，不希望客户端一打开就看到一堆从网上抓来的简介。
+  bool useScrape = false;
+
   static AppStore? _instance;
 
   /// 载入单例。
@@ -190,6 +197,7 @@ class AppStore {
     lastServerId = json['lastServerId'] as String?;
     crossDeviceProgress = json['crossDeviceProgress'] as bool? ?? false;
     rememberTracks = json['rememberTracks'] as bool? ?? true;
+    useScrape = json['useScrape'] as bool? ?? false;
 
     final rawServers = json['servers'];
     if (rawServers is List) {
@@ -227,6 +235,7 @@ class AppStore {
       if (lastServerId != null) 'lastServerId': lastServerId,
       'crossDeviceProgress': crossDeviceProgress,
       'rememberTracks': rememberTracks,
+      'useScrape': useScrape,
       'servers': servers.map((e) => e.toJson()).toList(),
       'trackPreferences': trackPreferences.map(
         (key, value) => MapEntry(key, value.toJson()),

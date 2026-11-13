@@ -350,15 +350,26 @@ class _LibraryScreenState extends State<LibraryScreen> {
           return LibraryTile(
             entry: video,
             onTap: () => unawaited(_open(video)),
+            posterUrl: _posterOf(group.scrape),
           );
         }
         return LibraryGroupTile(
           group: group,
           expanded: _expanded.contains(group.path),
           onTap: () => _toggle(group),
+          posterUrl: _posterOf(group.scrape),
         );
       },
     );
+  }
+
+  /// 这一行要显示的海报地址。
+  ///
+  /// 客户端关掉刮削之后即便服务端还带着 scrape 字段也不显示——开关的意义
+  /// 就是「我不想在列表里看到这些」。
+  String? _posterOf(ScrapeInfo? info) {
+    if (!widget.store.useScrape) return null;
+    return widget.client.posterUri(info);
   }
 
   /// 展开或收起一个文件夹。

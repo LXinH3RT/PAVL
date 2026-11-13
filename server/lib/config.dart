@@ -11,6 +11,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'scrape/settings.dart';
+
 /// 便携版数据目录名，与客户端保持一致。
 const String portableDirName = 'PAVL-data';
 
@@ -199,6 +201,7 @@ class ServerConfig {
     this.enableDiscovery = true,
     this.discoveryPort = 45789,
     this.hideEmptyDirs = true,
+    this.scrape = const ScrapeSettings(),
   }) : roots = roots ?? <RootDir>[];
 
   /// HTTP 监听端口。
@@ -231,6 +234,12 @@ class ServerConfig {
   /// 客户端列表里。想看到完整文件树时可关掉。
   bool hideEmptyDirs;
 
+  /// 刮削配置：是否联网找影片信息、用哪几个来源。
+  ///
+  /// 刮削是在服务端做的：客户端只负责显示。关掉之后服务端不再发起任何外部
+  /// 请求，已经刮到的记录仍然留在 `scrape.json` 里。
+  ScrapeSettings scrape;
+
   Map<String, Object?> toJson() => {
         'port': port,
         'serverName': serverName,
@@ -241,6 +250,7 @@ class ServerConfig {
         'enableDiscovery': enableDiscovery,
         'discoveryPort': discoveryPort,
         'hideEmptyDirs': hideEmptyDirs,
+        'scrape': scrape.toJson(),
       };
 
   static ServerConfig fromJson(Map<String, Object?> json) {
@@ -266,6 +276,7 @@ class ServerConfig {
       hideEmptyDirs: json['hideEmptyDirs'] is bool
           ? json['hideEmptyDirs']! as bool
           : true,
+      scrape: ScrapeSettings.fromJson(json['scrape']),
     );
   }
 

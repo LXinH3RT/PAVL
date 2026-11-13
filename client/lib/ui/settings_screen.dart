@@ -77,10 +77,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// 页时问一次 `/info`。那是免鉴权接口，不必带令牌。
   String? _serverVersion;
 
+  /// 服务端的刮削配置。拿不到就保持 null，界面上只留客户端的显示开关。
+  ScrapeConfig? _scrape;
+
+  /// 是否正在把刮削配置写回服务端。改来源要串行发请求，避免几个开关同时改
+  /// 时后发的把先发的覆盖掉。
+  bool _scrapeBusy = false;
+
   @override
   void initState() {
     super.initState();
     _loadServerVersion();
+    _loadScrapeConfig();
   }
 
   @override
@@ -123,6 +131,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _persist(void Function() change) {
     setState(change);
     _save();
+  }
+
+  /// 问一次服务端的刮削配置。
+  ///
+  /// 失败只记日志：老服务端没有这几个接口，设置页不该因此报错，客户端的显示
+  /// 开关照样能用。
+  Future<void> _loadScrapeConfig() async {
+    final client = PavlClient(
+      connection: widget.connection,
+      deviceId: widget.store.deviceId,
+    );
+    try {
+      final config = await client.scrapeConfig();
+      if (mounted) setState(() => _scrape = config);
+    } catch (error) {
+      logLine('ui', '读取刮削配置失败：$error');
+    } finally {
+      client.close();
+    }
+  }
+
+  /// 把刮削配置写回服务端。
+  ///
+  /// 只在用户动服务端那几项时调用；客户端自己的显示开关走 [_persist]，不必
+  /// 联网。
+  Future<void> _saveScrapeConfig({
+    bool? enabled,
+    bool? autoMatch,
+    List<String>? sources,
+  }) async {
+    if (_scrapeBusy) return;
+    setState(() => _scrapeBusy = true);
+    final client = PavlClient(
+      connection: widget.connection,
+      deviceId: widget.store.deviceId,
+    );
+    try {
+      final config = await client.updateScrapeConfig(
+        enabled: enabled,
+        autoMatch: autoMatch,
+        sources: sources,
+      );
+      if (mounted) setState(() => _scrape = config);
+    } catch (error) {
+      logLine('ui', '保存刮削配置失败：$error');
+      if (mounted) {
+        _toast('服务端没有接受这项改动：$error');
+        // 失败时把界面拉回服务端的真实状态，别让开关停在没生效的位置。
+        await _loadScrapeConfig();
+      }
+    } finally {
+      client.close();
+      if (mounted) setState(() => _scrapeBusy = false);
+    }
   }
 
   Future<void> _save() async {
@@ -240,6 +302,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('配置存储位置'),
             subtitle: Text(_storageHint),
           ),
+          const Divider(height: 24),
+          const _SectionTitle('片库'),
+          SwitchListTile(
+            value: widget.store.useScrape,
+            title: const Text('显示刮削信息'),
+            subtitle: const Text(
+              '打开后片库里的文件夹行会显示海报、年份、评分与类型。'
+              '刮削本身在服务端做，关掉只是这台设备不再显示。',
+            ),
+            onChanged: (value) => _persist(
+              () => widget.store.useScrape = value,
+            ),
+          ),
+          ..._scrapeRows(),
         ];
 
       case SettingsTab.about:
@@ -315,6 +391,187 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final version = _serverVersion;
     if (version == null || version.isEmpty) return '未知';
     return version;
+  }
+
+  /// 服务端刮削那几行。
+  ///
+  /// 老版本服务端没有 `/scrape/settings`，`_scrape` 会一直是 null —— 这时候
+  /// 干脆不画这一段，而不是画一堆点不动的开关。
+  List<Widget> _scrapeRows() {
+    final scrape = _scrape;
+    if (scrape == null) return const [];
+    return [
+      SwitchListTile(
+        value: scrape.enabled,
+        title: const Text('服务端刮削'),
+        subtitle: const Text(
+          '开启后服务端会按片名去豆瓣、IMDb、B站找海报与简介。'
+          '关掉后不再联网，已经抓到的记录仍保留在服务端。',
+        ),
+        onChanged: _scrapeBusy
+            ? null
+            : (value) => _saveScrapeConfig(enabled: value),
+      ),
+      if (scrape.enabled) ...[
+        SwitchListTile(
+          value: scrape.autoMatch,
+          title: const Text('自动匹配'),
+          subtitle: const Text(
+            '片库里出现新片时，只有片名高度吻合才自动采纳，'
+            '拿不准的留给手动选择。',
+          ),
+          onChanged: _scrapeBusy
+              ? null
+              : (value) => _saveScrapeConfig(autoMatch: value),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+          child: Text(
+            '信息来源',
+            style: const TextStyle(
+              fontSize: 12.5,
+              color: PavlColors.textDim,
+            ),
+          ),
+        ),
+        for (final option in scrape.availableSources)
+          CheckboxListTile(
+            value: scrape.sources.contains(option.id),
+            dense: true,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: Text(option.label),
+            // 关掉最后一个源就没得刮了，禁掉这一格而不是让用户点了没反应。
+            onChanged: _scrapeBusy ||
+                    (scrape.sources.length == 1 &&
+                        scrape.sources.contains(option.id))
+                ? null
+                : (checked) => _toggleSource(option.id, checked ?? false),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+          child: Text(
+            _scrapeStatusText(scrape),
+            style: const TextStyle(
+              fontSize: 12.5,
+              color: PavlColors.textDim,
+              height: 1.5,
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(
+            children: [
+              OutlinedButton(
+                onPressed: _scrapeBusy || scrape.running
+                    ? null
+                    : _runAutoScrape,
+                child: Text(scrape.running ? '正在刮削' : '刮削整个片库'),
+              ),
+              const SizedBox(width: 10),
+              OutlinedButton(
+                onPressed: _scrapeBusy ? null : _clearScrape,
+                child: const Text('清除刮削记录'),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ];
+  }
+
+  String _scrapeStatusText(ScrapeConfig scrape) {
+    final count = scrape.recordCount;
+    if (scrape.running) {
+      return '正在后台刮削，可以继续浏览，完成后回到这里看结果。';
+    }
+    if (count <= 0) {
+      return '还没有刮到任何影片。点「刮削整个片库」开始，'
+          '片名与文件名差别较大时可能找不到，可以再手动挑。';
+    }
+    return '已经刮到 $count 部影片。';
+  }
+
+  /// 勾选或取消一个来源。
+  ///
+  /// 服务端要求至少留一个源，所以最后一个是禁用的；这里再兜一层，避免并发
+  /// 点击把列表清空。
+  void _toggleSource(String id, bool checked) {
+    final scrape = _scrape;
+    if (scrape == null) return;
+    final next = [...scrape.sources];
+    if (checked) {
+      if (!next.contains(id)) next.add(id);
+    } else {
+      next.remove(id);
+      if (next.isEmpty) return;
+    }
+    // 保持「豆瓣、IMDb、B站」的固定顺序，界面上勾选顺序不会来回跳。
+    next.sort((a, b) => scrape.availableSources
+        .indexWhere((e) => e.id == a)
+        .compareTo(scrape.availableSources.indexWhere((e) => e.id == b)));
+    _saveScrapeConfig(sources: next);
+  }
+
+  /// 让服务端在后台把整个片库扫一遍。
+  Future<void> _runAutoScrape() async {
+    final client = PavlClient(
+      connection: widget.connection,
+      deviceId: widget.store.deviceId,
+    );
+    try {
+      final folders = await client.scrapeAuto();
+      if (mounted) {
+        _toast(folders > 0
+            ? '已交给服务端处理 $folders 个文件夹，稍后回来看结果'
+            : '片库里没有需要刮削的条目');
+      }
+    } catch (error) {
+      logLine('ui', '启动刮削失败：$error');
+      if (mounted) _toast('没能启动刮削：$error');
+    } finally {
+      client.close();
+    }
+  }
+
+  /// 清空服务端保存的刮削记录。
+  ///
+  /// 二次确认：这会连海报一起删掉，重新刮要花不少时间。
+  Future<void> _clearScrape() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清除刮削记录'),
+        content: const Text('会删掉服务端保存的全部刮削信息与海报，下次要重新刮。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    final client = PavlClient(
+      connection: widget.connection,
+      deviceId: widget.store.deviceId,
+    );
+    try {
+      await client.scrapeClear();
+      if (!mounted) return;
+      _toast('已清除');
+      await _loadScrapeConfig();
+    } catch (error) {
+      logLine('ui', '清除刮削记录失败：$error');
+      if (mounted) _toast('没能清除：$error');
+    } finally {
+      client.close();
+    }
   }
 
   String get _storageLabel =>

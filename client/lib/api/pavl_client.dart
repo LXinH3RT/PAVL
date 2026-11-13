@@ -255,6 +255,99 @@ class MediaEntry {
   }
 }
 
+/// 一条刮削结果。
+///
+/// 字段与服务端 `scrape/store.dart` 里的记录一一对应，但这里只管显示：海报
+/// 用 [posterUrl]（服务端自己的 `/api/v1/poster`），不是来源站点的地址。
+class ScrapeInfo {
+  ScrapeInfo({
+    required this.source,
+    required this.title,
+    this.originalTitle,
+    this.year,
+    this.kind = 'unknown',
+    this.posterUrl,
+    this.intro,
+    this.rating,
+    this.ratingCount,
+    this.genres = const [],
+    this.countries = const [],
+    this.directors = const [],
+    this.actors = const [],
+    this.episodeCount,
+  });
+
+  /// `douban` / `imdb` / `bilibili`。
+  final String source;
+  final String title;
+  final String? originalTitle;
+  final int? year;
+  final String kind;
+
+  /// 海报的相对地址，需要拼上服务端前缀才能请求。
+  final String? posterUrl;
+
+  final String? intro;
+  final double? rating;
+  final int? ratingCount;
+  final List<String> genres;
+  final List<String> countries;
+  final List<String> directors;
+  final List<String> actors;
+  final int? episodeCount;
+
+  /// 来源的中文名，界面上标一句「来自豆瓣」。
+  String get sourceLabel {
+    switch (source) {
+      case 'douban':
+        return '豆瓣';
+      case 'imdb':
+        return 'IMDb';
+      case 'bilibili':
+        return 'B站';
+      default:
+        return source;
+    }
+  }
+
+  /// 评分与年份拼一行副标题，没有可用信息时返回空串。
+  String get subtitle {
+    final parts = <String>[];
+    if (year != null && year! > 0) parts.add('$year');
+    final score = rating;
+    if (score != null && score > 0) parts.add('★ ${score.toStringAsFixed(1)}');
+    if (genres.isNotEmpty) parts.add(genres.take(2).join(' / '));
+    return parts.join(' · ');
+  }
+
+  static ScrapeInfo? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final title = raw['title'];
+    if (title is! String || title.isEmpty) return null;
+    return ScrapeInfo(
+      source: raw['source'] as String? ?? '',
+      title: title,
+      originalTitle: raw['originalTitle'] as String?,
+      year: (raw['year'] as num?)?.toInt(),
+      kind: raw['kind'] as String? ?? 'unknown',
+      posterUrl: raw['posterUrl'] as String?,
+      intro: raw['intro'] as String?,
+      rating: (raw['rating'] as num?)?.toDouble(),
+      ratingCount: (raw['ratingCount'] as num?)?.toInt(),
+      genres: _stringList(raw['genres']),
+      countries: _stringList(raw['countries']),
+      directors: _stringList(raw['directors']),
+      actors: _stringList(raw['actors']),
+      episodeCount: (raw['episodeCount'] as num?)?.toInt(),
+    );
+  }
+
+  static List<String> _stringList(Object? raw) {
+    if (raw is! List) return const [];
+    return raw.whereType<String>().where((s) => s.isNotEmpty).toList();
+  }
+}
+
 /// 片库里的一行。
 ///
 /// 服务端把同一文件夹里的视频收成一行发过来，行上是文件夹名与集数，展开后
@@ -268,6 +361,7 @@ class LibraryGroup {
     this.root = '',
     this.count = 0,
     List<MediaEntry> items = const [],
+    this.scrape,
   }) : items = List<MediaEntry>.unmodifiable(items);
 
   /// `dir` 或 `video`。
@@ -288,6 +382,9 @@ class LibraryGroup {
   /// 这一行的视频，按路径排好序。
   final List<MediaEntry> items;
 
+  /// 刮削到的影片信息，没刮过或客户端关掉了刮削时为 null。
+  final ScrapeInfo? scrape;
+
   bool get isDir => kind == 'dir';
 
   static LibraryGroup fromJson(Map<String, Object?> json) {
@@ -303,6 +400,7 @@ class LibraryGroup {
       root: json['root'] as String? ?? '',
       count: (json['count'] as num?)?.toInt() ?? items.length,
       items: items,
+      scrape: ScrapeInfo.fromJson(json['scrape']),
     );
   }
 }
@@ -361,6 +459,173 @@ class LibraryPage {
     pageSize: 60,
     hasMore: false,
   );
+}
+
+/// 服务端的刮削配置。
+class ScrapeConfig {
+  ScrapeConfig({
+    required this.enabled,
+    required this.autoMatch,
+    this.sources = const [],
+    this.availableSources = const [],
+    this.recordCount = 0,
+    this.running = false,
+  });
+
+  /// 服务端是否开着刮削。
+  final bool enabled;
+
+  /// 是否自动匹配。
+  final bool autoMatch;
+
+  /// 参与刮削的来源 id。
+  final List<String> sources;
+
+  /// 服务端支持的来源，界面上给勾选项用。
+  final List<ScrapeSourceOption> availableSources;
+
+  /// 已刮到的条数。
+  final int recordCount;
+
+  /// 是否正在后台跑批量匹配。
+  final bool running;
+
+  static ScrapeConfig fromJson(Map<String, Object?> json) {
+    final rawSources = json['sources'];
+    final sources = <String>[];
+    if (rawSources is List) {
+      for (final item in rawSources) {
+        // GET 与 POST 的 sources 形状不同：GET 给的是 [{id,label}]，POST 回的
+        // 是 ['douban', ...]。两种都认，省得调用方分辨。
+        if (item is String) {
+          sources.add(item);
+        } else if (item is Map && item['id'] is String) {
+          sources.add(item['id']! as String);
+        }
+      }
+    }
+    final available = <ScrapeSourceOption>[];
+    if (rawSources is List) {
+      for (final item in rawSources) {
+        if (item is Map && item['id'] is String) {
+          available.add(ScrapeSourceOption(
+            id: item['id']! as String,
+            label: item['label'] as String? ?? item['id']! as String,
+          ));
+        }
+      }
+    }
+    return ScrapeConfig(
+      enabled: json['enabled'] as bool? ?? false,
+      autoMatch: json['autoMatch'] as bool? ?? false,
+      sources: sources,
+      availableSources: available,
+      recordCount: (json['recordCount'] as num?)?.toInt() ?? 0,
+      running: json['running'] as bool? ?? false,
+    );
+  }
+}
+
+/// 一个可选的来源。
+class ScrapeSourceOption {
+  const ScrapeSourceOption({required this.id, required this.label});
+
+  final String id;
+  final String label;
+}
+
+/// 搜索出来的一个候选。
+class ScrapeMatch {
+  ScrapeMatch({
+    required this.candidate,
+    required this.score,
+    required this.strong,
+    required this.query,
+  });
+
+  /// 原始 JSON，手动采纳时原样送回服务端。
+  final Map<String, Object?> candidate;
+
+  final int score;
+
+  /// 是否够格自动采纳。
+  final bool strong;
+
+  final String query;
+
+  String get source => candidate['source'] as String? ?? '';
+  String get title => candidate['title'] as String? ?? '';
+  String? get originalTitle => candidate['originalTitle'] as String?;
+  int? get year => (candidate['year'] as num?)?.toInt();
+  String? get hint => candidate['hint'] as String?;
+  double? get rating => (candidate['rating'] as num?)?.toDouble();
+  String? get poster => candidate['poster'] as String?;
+
+  String get sourceLabel {
+    switch (source) {
+      case 'douban':
+        return '豆瓣';
+      case 'imdb':
+        return 'IMDb';
+      case 'bilibili':
+        return 'B站';
+      default:
+        return source;
+    }
+  }
+
+  /// 副标题：年份与来源。
+  String get subtitle {
+    final parts = <String>[];
+    if (year != null && year! > 0) parts.add('$year');
+    parts.add(sourceLabel);
+    final extra = hint;
+    if (extra != null && extra.isNotEmpty) parts.add(extra);
+    return parts.join(' · ');
+  }
+
+  static ScrapeMatch fromJson(Map<String, Object?> json) => ScrapeMatch(
+        candidate: json,
+        score: (json['score'] as num?)?.toInt() ?? 0,
+        strong: json['strong'] as bool? ?? false,
+        query: json['query'] as String? ?? '',
+      );
+}
+
+/// 关键词搜索的结果。
+class ScrapeSearchResult {
+  ScrapeSearchResult({
+    required this.matches,
+    this.failures = const {},
+    this.disabled = false,
+  });
+
+  final List<ScrapeMatch> matches;
+
+  /// 哪个来源失败了、为什么。
+  final Map<String, String> failures;
+
+  /// 服务端关掉了刮削。
+  final bool disabled;
+
+  static ScrapeSearchResult fromJson(Map<String, Object?> json) {
+    final raw = json['items'] as List<Object?>? ?? const [];
+    final failures = <String, String>{};
+    final rawFailures = json['failures'];
+    if (rawFailures is Map) {
+      rawFailures.forEach((key, value) {
+        if (key is String && value is String) failures[key] = value;
+      });
+    }
+    return ScrapeSearchResult(
+      matches: [
+        for (final item in raw)
+          if (item is Map<String, Object?>) ScrapeMatch.fromJson(item),
+      ],
+      failures: failures,
+      disabled: json['disabled'] as bool? ?? false,
+    );
+  }
 }
 
 /// 一部片的音轨字幕偏好。
@@ -827,6 +1092,90 @@ class PavlClient {
   Future<int> refresh() async {
     final json = await _postJson('/api/v1/refresh', const {});
     return (json['count'] as num?)?.toInt() ?? 0;
+  }
+
+  // ---------------------------------------------------------------- 刮削
+
+  /// 读服务端的刮削配置。
+  Future<ScrapeConfig> scrapeConfig() async {
+    final json = await _getJson('/api/v1/scrape/settings');
+    return ScrapeConfig.fromJson(json);
+  }
+
+  /// 改服务端的刮削配置。只传要改的字段。
+  Future<ScrapeConfig> updateScrapeConfig({
+    bool? enabled,
+    bool? autoMatch,
+    List<String>? sources,
+  }) async {
+    final json = await _postJson('/api/v1/scrape/settings', {
+      if (enabled != null) 'enabled': enabled,
+      if (autoMatch != null) 'autoMatch': autoMatch,
+      if (sources != null) 'sources': sources,
+    });
+    return ScrapeConfig.fromJson(json);
+  }
+
+  /// 按关键词在所有启用的来源里找候选。
+  Future<ScrapeSearchResult> scrapeSearch(
+    String keyword, {
+    String? kind,
+    int? year,
+    String? source,
+  }) async {
+    final json = await _getJson('/api/v1/scrape/search', query: {
+      'q': keyword,
+      if (kind != null) 'kind': kind,
+      if (year != null) 'year': '$year',
+      if (source != null) 'source': source,
+    });
+    return ScrapeSearchResult.fromJson(json);
+  }
+
+  /// 把选中的候选套到一组路径上。
+  ///
+  /// [candidate] 是从 [scrapeSearch] 拿到的原始 JSON，原样送回服务端——服务端
+  /// 只认其中的 source/id/title，其余字段它自己会重新抓，避免客户端伪造。
+  Future<ScrapeInfo?> scrapeApply({
+    required List<String> paths,
+    required Map<String, Object?> candidate,
+    String query = '',
+    int score = 0,
+  }) async {
+    final json = await _postJson('/api/v1/scrape/apply', {
+      'paths': paths,
+      'candidate': candidate,
+      'query': query,
+      'score': score,
+    });
+    return ScrapeInfo.fromJson(json['record']);
+  }
+
+  /// 让服务端对整库（或指定路径）批量自动匹配。
+  ///
+  /// 服务端立刻返回，真正的匹配在后台跑；[paths] 为空表示全库。
+  Future<int> scrapeAuto({List<String> paths = const []}) async {
+    final json = await _postJson('/api/v1/scrape/auto', {
+      'paths': paths,
+    });
+    return (json['folders'] as num?)?.toInt() ?? 0;
+  }
+
+  /// 清空服务端刮到的全部结果。
+  Future<void> scrapeClear() async {
+    await _postJson('/api/v1/scrape/clear', const {});
+  }
+
+  /// 把 [ScrapeInfo.posterUrl] 拼成可以直接请求的绝对地址。
+  ///
+  /// 服务端发的是 `/api/v1/poster?name=xxx` 这种相对路径，客户端要带令牌才能
+  /// 取到图，所以这里顺手把令牌也拼进查询参数——[Image.network] 加不了请求头。
+  String? posterUri(ScrapeInfo? info) {
+    final relative = info?.posterUrl;
+    if (relative == null || relative.isEmpty) return null;
+    final token = connection.token;
+    if (token == null || token.isEmpty) return '${connection.baseUrl}$relative';
+    return '${connection.baseUrl}$relative&token=$token';
   }
 
   void close() => _http.close(force: true);

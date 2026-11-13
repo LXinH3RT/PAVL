@@ -28,7 +28,9 @@ PAVL splits the problem in two:
 With that split, the only remaining bottleneck is the network itself: on a gigabit LAN seeking responds
 in milliseconds and the server's CPU stays nearly idle.
 
-What it does not do: no transcoding, no download cache, no metadata scraping, no internet exposure.
+What it does not do: no transcoding, no download cache, no internet exposure. Scraping is optional and
+off by default; when enabled, the server is the one that fetches posters and synopses — see the Scraping
+section.
 Which formats play is a property of the client, not of the server.
 
 ## Features
@@ -40,12 +42,13 @@ Which formats play is a property of the client, not of the server.
 | **Browsing** | Drill down folder by folder with item counts and file sizes; breadcrumbs jump back to any level; folders with no media are hidden |
 | **Sorting** | Sorted on the server: folders first, numbers by value (`Episode 2` before `Episode 10`), letters case-insensitive, Chinese characters by pinyin. Size and modified time are also available |
 | **Library** | Grouped by folder: a folder row shows up to two levels of directory names plus its episode count, and expands in place; a folder holding one video shows that video directly. Ordered by name, searchable by keyword, paged as you scroll, with recently played on top (items watched to 90% are left out) |
+| **Scraping** | Optional. When on, the server looks titles up on Douban, IMDb and Bilibili for a poster, year, rating and synopsis, and the library's folder rows show the poster; a show is fetched once and its episodes share the result |
 | **Playback** | Play-pause, ±10 s, scrubbing, 0.5x–2.0x speed, volume, fullscreen; the display is kept awake while playing and released on pause or exit |
 | **Track selection** | Audio and subtitle tracks listed separately; the choice is remembered per file and restored on reopen. When a track id changes (another episode, a remux, a re-encode) it falls back to the same language or title |
 | **Subtitles** | Embedded tracks plus sidecar files in the same folder, matched by base name and episode number first and by similarity as a fallback; ASS styling renders as authored |
 | **Progress** | Two modes: this device only, or synced across devices so you can continue on another machine; the list shows progress and percentage |
 | **Resume** | Reopening a file offers the previous position: start over or continue; from 90% on a file counts as watched, so no prompt and no entry in recently played |
-| **Settings** | A dedicated page with two sections down the left: playback, about. The rail moves to the top when the window narrows |
+| **Settings** | A dedicated page with two sections down the left: playback, about. The rail moves to the top when the window narrows; the scraping switches sit in the lower half of Playback |
 | **Portable** | Both the server and the Windows client keep data, logs and temporary files in a `PAVL-data/` folder next to the executable, so copying the folder is enough. If the server ends up in a read-only location it falls back to `%APPDATA%\PAVL` |
 | **Tray** | The server lives in the notification area; right-click to add or change shared folders, stop sharing one of them, and to read the address and PIN. Changes take effect immediately without a restart |
 | **Diagnostics** | Playback failures report a reason and the log location; sensitive fields such as tokens are redacted |
@@ -118,6 +121,38 @@ A few deliberate trade-offs:
 * **The server does not parse video.** Duration and codec information is written back by a client when
   it opens a file, so files that were never played show their size only.
 
+### Scraping
+
+Scraping runs on the server: every outbound request comes from there, and the client never talks to an
+external site directly. It is off by default; turn it on under Settings → Playback → Library.
+
+Three sources, each independently selectable:
+
+| Source | Search | Details | Notes |
+|-|-|-|-|
+| Douban | `movie.douban.com/j/subject_suggest` | `m.douban.com/rexxar/api/v2` | The most complete Chinese metadata, poster and synopsis included; the web pages sit behind a verification wall, only the API works |
+| IMDb | `v2.sg.media-imdb.com/suggestion/x` | `v3-cinemeta.strem.io` | English titles, rating and synopsis; imdb.com itself returns nothing to scripted requests |
+| Bilibili | `api.bilibili.com/x/web-interface/search/all/v2` | same endpoint, looked up by id | Best for Chinese productions and anything uploaded there; entries are videos rather than films |
+
+1905.com was in the original plan but answers 403 to every non-browser request, so it was dropped.
+
+**Matching.** The file name goes through `parseFileName`, which strips release-group, resolution and codec
+noise, and the result is used as the query. Candidates are scored on title similarity — an exact title
+scores 100, with bonuses for a matching year and kind. Only “strong” matches (above 100) are taken by
+automatic matching. Several candidates with the same score but different years (Murder on the Orient
+Express has 1974, 2010, 2015 and 2017 versions) are demoted to weak matches and left for the user:
+picking the wrong version automatically is worse than picking none. Different seasons of the same show
+do not count as ambiguous.
+
+**Where it is stored.** Records go into `scrape.json` on the server and posters into `posters/` beside it;
+the client only reads and displays them. A show is scraped once and shared with every episode under that
+folder, so marking episodes does not trigger another round. The client's “Show scraped info” switch is a
+display-only toggle: turning it off hides posters and ratings on that device while the server records
+stay untouched.
+
+**Rate limits.** One request per 1200 ms for Douban, 400 ms for Bilibili and 250 ms for IMDb, serialised
+per source within a run. Automatic matching happens in the background and does not block browsing.
+
 ### Where the data lives
 
 Both sides ask whether the program folder is writable, not whether an installer was used — the server
@@ -177,6 +212,7 @@ PAVL/
 │     ├─ sort_key.dart         The single collation rule (pinyin, numbers, case)
 │     ├─ library.dart          Directory tree, library index, cache, progress, metadata, prefs
 │     ├─ library_groups.dart   Folder grouping and paging units for the library
+│     ├─ scrape/               Scraping: source adapters, matching, record and poster storage, background jobs
 │     ├─ auth.dart             PIN pairing, tokens, device management
 │     ├─ discovery.dart        UDP broadcast discovery
 │     ├─ streaming.dart        HTTP Range file serving

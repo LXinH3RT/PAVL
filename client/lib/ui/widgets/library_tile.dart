@@ -1,9 +1,12 @@
-/// 片库列表的行。
+/// 片库里的一行。
 ///
 /// 与浏览页的 [EntryTile] 分开：那边每行是一个文件系统条目，要显示「几项」、
 /// 文件夹图标、外挂字幕提示；这边每行是一部片或一个收拢后的文件夹，要显示
 /// 解析出来的标题、季集编号和文件大小。硬塞进同一个组件会让两边都长出一堆
 /// 「当前是不是目录」的分支。
+///
+/// 刮削到信息之后，行首的图标换成海报，标题换成刮到的片名，副行补上年份与
+/// 评分；没刮到就保持原样，两种状态的行高一致，列表不会跳。
 library;
 
 import 'package:flutter/material.dart';
@@ -18,6 +21,7 @@ class LibraryGroupTile extends StatelessWidget {
     required this.group,
     required this.expanded,
     required this.onTap,
+    this.posterUrl,
   });
 
   final LibraryGroup group;
@@ -28,8 +32,13 @@ class LibraryGroupTile extends StatelessWidget {
   /// 点这一行时切换展开状态。
   final VoidCallback onTap;
 
+  /// 海报的绝对地址，没刮到或客户端关掉刮削时为 null。
+  final String? posterUrl;
+
   @override
   Widget build(BuildContext context) {
+    final scrape = group.scrape;
+    final title = (scrape?.title.isNotEmpty ?? false) ? scrape!.title : group.name;
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
@@ -41,10 +50,13 @@ class LibraryGroupTile extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(
               children: [
-                Icon(
-                  expanded ? Icons.folder_open : Icons.folder_outlined,
-                  size: 20,
-                  color: PavlColors.textDim,
+                _Leading(
+                  posterUrl: posterUrl,
+                  fallback: Icon(
+                    expanded ? Icons.folder_open : Icons.folder_outlined,
+                    size: 20,
+                    color: PavlColors.textDim,
+                  ),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -53,14 +65,14 @@ class LibraryGroupTile extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        group.name,
+                        title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 14),
                       ),
                       const SizedBox(height: 3),
                       Text(
-                        groupSubtitle(group),
+                        groupSubtitle(group, showScrape: posterUrl != null),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -86,16 +98,72 @@ class LibraryGroupTile extends StatelessWidget {
   }
 }
 
-/// 文件夹行下面那行说明：集数与所属共享目录。
+/// 文件夹行下面那行说明：集数、评分与所属共享目录。
 ///
 /// 集数与「个视频」分开说，是因为同一个文件夹里也可能躺着几部电影而不是一部
 /// 剧——那些文件解析不出集号，写「集」会让人以为漏了编号。
-String groupSubtitle(LibraryGroup group) {
+///
+/// [showScrape] 为假时不补年份与评分：客户端关掉刮削之后，行的副标题应当与
+/// 没刮过片子的行长得一样，否则开关只关了一半。
+String groupSubtitle(LibraryGroup group, {bool showScrape = true}) {
   final numbered = group.items.any((e) => (e.episode ?? 0) > 0);
   final unit = numbered ? '集' : '个视频';
   final parts = <String>['${group.count} $unit'];
+  final scrape = group.scrape;
+  if (showScrape && scrape != null) {
+    if (scrape.year != null && scrape.year! > 0) parts.add('${scrape.year}');
+    final score = scrape.rating;
+    if (score != null && score > 0) parts.add('★ ${score.toStringAsFixed(1)}');
+    if (scrape.genres.isNotEmpty) parts.add(scrape.genres.take(2).join(' / '));
+  }
   if (group.root.isNotEmpty) parts.add(group.root);
   return parts.join(' · ');
+}
+
+/// 行首那半个图标位：有海报就显示海报，没有就显示原来的图标。
+///
+/// 尺寸固定，保证两种状态的行高一致——列表里混着刮到的与没刮到的行时，
+/// 高度不一致会让滚动看起来在抖。
+class _Leading extends StatelessWidget {
+  const _Leading({required this.fallback, this.posterUrl});
+
+  final Widget fallback;
+  final String? posterUrl;
+
+  static const double _width = 34;
+  static const double _height = 48;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = posterUrl;
+    if (url == null || url.isEmpty) {
+      return SizedBox(
+        width: _width,
+        height: _height,
+        child: Center(child: fallback),
+      );
+    }
+    return SizedBox(
+      width: _width,
+      height: _height,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: Image.network(
+          url,
+          width: _width,
+          height: _height,
+          fit: BoxFit.cover,
+          // 海报取不到时退回图标：网络断、服务端清了缓存、图片损坏都会走到
+          // 这里，不该让整行变成空白。
+          errorBuilder: (_, __, ___) => Center(child: fallback),
+          // 占位用同色底，避免加载瞬间闪一下白块。
+          loadingBuilder: (context, child, progress) => progress == null
+              ? child
+              : const ColoredBox(color: PavlColors.surfaceHigh),
+        ),
+      ),
+    );
+  }
 }
 
 /// 片库里的一部片。
@@ -105,6 +173,7 @@ class LibraryTile extends StatelessWidget {
     required this.entry,
     required this.onTap,
     this.indent = false,
+    this.posterUrl,
   });
 
   final MediaEntry entry;
@@ -112,6 +181,10 @@ class LibraryTile extends StatelessWidget {
 
   /// 是否缩进。展开文件夹之后里面的各集缩进一级，表示从属关系。
   final bool indent;
+
+  /// 海报的绝对地址。展开后的各集不传——同一部剧的每一集海报都一样，
+  /// 重复显示只是噪音。
+  final String? posterUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -133,8 +206,11 @@ class LibraryTile extends StatelessWidget {
             padding: EdgeInsets.fromLTRB(indent ? 40 : 12, 10, 12, 10),
             child: Row(
               children: [
-                const Icon(Icons.movie_outlined,
-                    size: 20, color: PavlColors.accent),
+                _Leading(
+                  posterUrl: posterUrl,
+                  fallback: const Icon(Icons.movie_outlined,
+                      size: 20, color: PavlColors.accent),
+                ),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(

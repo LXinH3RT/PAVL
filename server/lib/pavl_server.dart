@@ -15,6 +15,9 @@ import 'discovery.dart';
 import 'library.dart';
 import 'library_groups.dart';
 import 'media.dart';
+import 'scrape/engine.dart';
+import 'scrape/models.dart';
+import 'scrape/store.dart';
 import 'sort_key.dart';
 import 'subtitle_match.dart';
 import 'streaming.dart';
@@ -36,7 +39,8 @@ class PavlServer {
     required this.progressStore,
     required this.trackPrefStore,
     required this.serverId,
-  });
+    ScrapeEngine? scrapeEngine,
+  }) : scrapeEngine = scrapeEngine ?? ScrapeEngine(store: ScrapeStore.defaultStore());
 
   final ServerConfig config;
   final ConfigStore configStore;
@@ -45,6 +49,9 @@ class PavlServer {
   final MetaStore metaStore;
   final ProgressStore progressStore;
   final TrackPrefStore trackPrefStore;
+
+  /// 刮削引擎。配置从 [ServerConfig.scrape] 来，改动会写回配置文件。
+  final ScrapeEngine scrapeEngine;
 
   /// 服务器唯一标识，首次启动生成，用于多服务器区分。
   final String serverId;
@@ -68,6 +75,9 @@ class PavlServer {
   /// 启动 HTTP 与发现服务。
   Future<void> start() async {
     if (_http != null) return;
+    // 引擎里的设置跟着配置文件走：改了配置要同步，否则界面上开了刮削、
+    // 服务端还按启动时那份空配置跑。
+    scrapeEngine.settings = config.scrape;
     final address = config.bindAddress == '0.0.0.0'
         ? InternetAddress.anyIPv4
         : InternetAddress.tryParse(config.bindAddress) ??
@@ -105,6 +115,7 @@ class PavlServer {
   Future<void> stop() async {
     _discovery?.stop();
     _discovery = null;
+    scrapeEngine.close();
     await _http?.close(force: true);
     _http = null;
   }
@@ -211,6 +222,24 @@ class PavlServer {
       case 'refresh':
         await _handleRefresh(request);
         return;
+      case 'poster':
+        await _handlePoster(request);
+        return;
+      case 'scrape/settings':
+        await _handleScrapeSettings(request);
+        return;
+      case 'scrape/search':
+        await _handleScrapeSearch(request);
+        return;
+      case 'scrape/apply':
+        await _handleScrapeApply(request);
+        return;
+      case 'scrape/auto':
+        await _handleScrapeAuto(request);
+        return;
+      case 'scrape/clear':
+        await _handleScrapeClear(request);
+        return;
       default:
         await _sendError(
             request, HttpStatus.notFound, 'not_found', '未知接口: $route');
@@ -272,6 +301,9 @@ class PavlServer {
       'indexedAt': library.indexedAt?.millisecondsSinceEpoch,
       'startedAt': _startedAt.millisecondsSinceEpoch,
       'uptimeSec': DateTime.now().difference(_startedAt).inSeconds,
+      // 服务端有没有开刮削。客户端设置里的「使用刮削」开关只在服务端开了
+      // 之后才允许打开——服务端没开的话，客户端打开了也只是空列表。
+      'scrape': config.scrape.enabled,
     });
   }
 
@@ -405,14 +437,34 @@ class PavlServer {
     final slice =
         startIdx >= total ? <LibraryGroup>[] : rows.sublist(startIdx, endIdx);
 
+    // 刮削结果按行挂上去：一行是文件夹时，取它第一个有记录的视频——同一部剧
+    // 的每一集写的是同一条记录，取哪一集都一样。没有任何记录的行不带这个字段，
+    // 客户端据此显示原始文件名。
+    final scraped = config.scrape.enabled
+        ? await scrapeEngine.recordsFor(slice.expand((r) => r.videos.map((v) => v.relativePath)))
+        : const <String, ScrapeRecord>{};
+    const posterBase = '/api/v1/poster?name=';
+
     await _sendJson(request, HttpStatus.ok, {
       'total': total,
       'videoTotal': videoTotal,
       'page': page,
       'pageSize': pageSize,
       'hasMore': endIdx < total,
+      'scrapeEnabled': config.scrape.enabled,
       'indexedAt': library.indexedAt?.millisecondsSinceEpoch,
-      'items': slice.map((e) => e.toJson()).toList(),
+      'items': slice.map((row) {
+        final json = row.toJson();
+        final record = scraped[row.path] ??
+            row.videos
+                .map((v) => scraped[v.relativePath])
+                .whereType<ScrapeRecord>()
+                .firstOrNull;
+        if (record != null) {
+          json['scrape'] = record.toJson(posterBase: posterBase);
+        }
+        return json;
+      }).toList(),
     });
   }
 
@@ -761,6 +813,255 @@ class PavlServer {
       'count': count,
       'indexedAt': library.indexedAt?.millisecondsSinceEpoch,
     });
+  }
+
+  // ---------------------------------------------------------------- 刮削
+
+  /// `GET /api/v1/scrape/settings`：读刮削配置。
+  ///
+  /// `POST` 时接受 `{enabled, autoMatch, sources}`，写回 `config.json`。
+  Future<void> _handleScrapeSettings(HttpRequest request) async {
+    final authDevice = await _requireAuth(request);
+    if (config.pin.isNotEmpty && authDevice == null) return;
+
+    if (request.method == 'GET') {
+      await _sendJson(request, HttpStatus.ok, {
+        ...config.scrape.toJson(),
+        'sources': ScrapeSource.values
+            .map((s) => {'id': s.wireName, 'label': s.label})
+            .toList(),
+        'recordCount': await scrapeEngine.recordCount,
+        'running': scrapeEngine.running,
+      });
+      return;
+    }
+    if (request.method != 'POST') {
+      await _sendError(request, HttpStatus.methodNotAllowed, 'method_not_allowed',
+          '只支持 GET 与 POST');
+      return;
+    }
+    final body = await _readJsonBody(request);
+    if (body == null) {
+      await _sendError(
+          request, HttpStatus.badRequest, 'bad_request', '请求体不是合法 JSON');
+      return;
+    }
+    var next = config.scrape;
+    if (body['enabled'] is bool) {
+      next = next.copyWith(enabled: body['enabled']! as bool);
+    }
+    if (body['autoMatch'] is bool) {
+      next = next.copyWith(autoMatch: body['autoMatch']! as bool);
+    }
+    final rawSources = body['sources'];
+    if (rawSources is List) {
+      final picked = <ScrapeSource>[];
+      for (final item in rawSources) {
+        final source = ScrapeSource.parse(item is String ? item : null);
+        if (source != null && !picked.contains(source)) picked.add(source);
+      }
+      if (picked.isNotEmpty) next = next.copyWith(sources: picked);
+    }
+    config.scrape = next;
+    scrapeEngine.settings = next;
+    await configStore.save(config);
+    await _sendJson(request, HttpStatus.ok, {
+      'ok': true,
+      ...next.toJson(),
+    });
+  }
+
+  /// `GET /api/v1/scrape/search?q=&kind=&year=&source=`：按关键词找候选。
+  Future<void> _handleScrapeSearch(HttpRequest request) async {
+    final authDevice = await _requireAuth(request);
+    if (config.pin.isNotEmpty && authDevice == null) return;
+    final query = request.uri.queryParameters;
+    final keyword = (query['q'] ?? '').trim();
+    if (keyword.isEmpty) {
+      await _sendError(
+          request, HttpStatus.badRequest, 'bad_request', '缺少关键词 q');
+      return;
+    }
+    final kind = ScrapeKind.parse(query['kind']);
+    final year = int.tryParse(query['year'] ?? '');
+    final only = ScrapeSource.parse(query['source']);
+    final result = await scrapeEngine.search(
+      keyword,
+      kind: kind == ScrapeKind.unknown ? null : kind,
+      year: year,
+      sources: only == null ? null : [only],
+    );
+    await _sendJson(request, HttpStatus.ok, result.toJson());
+  }
+
+  /// `POST /api/v1/scrape/apply`：把选中的候选套到一组路径上。
+  Future<void> _handleScrapeApply(HttpRequest request) async {
+    final authDevice = await _requireAuth(request);
+    if (config.pin.isNotEmpty && authDevice == null) return;
+    if (request.method != 'POST') {
+      await _sendError(
+          request, HttpStatus.methodNotAllowed, 'method_not_allowed', '需要 POST');
+      return;
+    }
+    final body = await _readJsonBody(request);
+    if (body == null) {
+      await _sendError(
+          request, HttpStatus.badRequest, 'bad_request', '请求体不是合法 JSON');
+      return;
+    }
+    final paths = _stringList(body['paths']);
+    final candidate = ScrapeCandidate.fromJson(body['candidate']);
+    if (paths.isEmpty || candidate == null) {
+      await _sendError(request, HttpStatus.badRequest, 'bad_request',
+          '需要 paths 与 candidate');
+      return;
+    }
+    // 只接受片库里真实存在的路径，避免客户端写进任意键。
+    final known = (await library.getAll()).map((e) => e.relativePath).toSet();
+    final valid = paths.where(known.contains).toList();
+    if (valid.isEmpty) {
+      await _sendError(
+          request, HttpStatus.notFound, 'not_found', '这些路径都不在片库里');
+      return;
+    }
+    final outcome = await scrapeEngine.scrapeOne(
+      paths: valid,
+      candidate: candidate,
+      query: body['query'] is String ? body['query']! as String : '',
+      score: body['score'] is int ? body['score']! as int : 0,
+      auto: false,
+    );
+    if (!outcome.ok) {
+      await _sendError(request, HttpStatus.badGateway, 'scrape_failed',
+          outcome.error ?? '刮削失败');
+      return;
+    }
+    await _sendJson(request, HttpStatus.ok, {
+      'ok': true,
+      'count': outcome.paths.length,
+      'record': outcome.record!.toJson(posterBase: '/api/v1/poster?name='),
+    });
+  }
+
+  /// `POST /api/v1/scrape/auto`：对整库或指定路径批量自动匹配。
+  Future<void> _handleScrapeAuto(HttpRequest request) async {
+    final authDevice = await _requireAuth(request);
+    if (config.pin.isNotEmpty && authDevice == null) return;
+    if (request.method != 'POST') {
+      await _sendError(
+          request, HttpStatus.methodNotAllowed, 'method_not_allowed', '需要 POST');
+      return;
+    }
+    if (!config.scrape.enabled) {
+      await _sendError(
+          request, HttpStatus.forbidden, 'scrape_disabled', '服务端已关闭刮削');
+      return;
+    }
+    if (!config.scrape.autoMatch) {
+      await _sendError(request, HttpStatus.forbidden, 'auto_disabled',
+          '服务端已关闭自动匹配，请手动选择');
+      return;
+    }
+    if (scrapeEngine.running) {
+      await _sendError(
+          request, HttpStatus.conflict, 'busy', '上一轮刮削还没跑完');
+      return;
+    }
+    final body = await _readJsonBody(request) ?? const <String, Object?>{};
+    final only = _stringList(body['paths']);
+    final known = await library.getAll();
+    final selected = only.isEmpty
+        ? known
+        : known.where((e) => only.contains(e.relativePath)).toList();
+    if (selected.isEmpty) {
+      await _sendError(
+          request, HttpStatus.notFound, 'not_found', '没有可刮削的视频');
+      return;
+    }
+    final groups = _scrapeFoldersOf(selected);
+    // 几百次外部请求要跑几分钟，不能堵着响应。先回「已开始」，客户端再查
+    // 状态；进度写到服务端日志里，排障时能看见卡在哪一部。
+    unawaited(scrapeEngine.autoScrape(groups).then((report) {
+      stderr.writeln(
+          '[scrape] 自动匹配结束：扫 ${report.scanned}，采纳 ${report.matched}，'
+          '跳过 ${report.skipped}，失败 ${report.failed}');
+      for (final error in report.errors) {
+        stderr.writeln('[scrape] $error');
+      }
+    }).catchError((Object error) {
+      stderr.writeln('[scrape] 自动匹配异常: $error');
+    }));
+    await _sendJson(request, HttpStatus.accepted, {
+      'ok': true,
+      'started': true,
+      'folders': groups.length,
+    });
+  }
+
+  /// `POST /api/v1/scrape/clear`：清空全部刮削结果。
+  Future<void> _handleScrapeClear(HttpRequest request) async {
+    final authDevice = await _requireAuth(request);
+    if (config.pin.isNotEmpty && authDevice == null) return;
+    if (request.method != 'POST') {
+      await _sendError(
+          request, HttpStatus.methodNotAllowed, 'method_not_allowed', '需要 POST');
+      return;
+    }
+    await scrapeEngine.clear();
+    await _sendJson(request, HttpStatus.ok, {'ok': true});
+  }
+
+  /// `GET /api/v1/poster?name=`：发海报文件。
+  ///
+  /// 客户端不直连豆瓣/IMDb 的图床——它们校验 Referer，而且把这些地址暴露给
+  /// 播放器没必要。海报在刮削时就落到本地，这里只做一次文件读取。
+  Future<void> _handlePoster(HttpRequest request) async {
+    final authDevice = await _requireAuth(request);
+    if (config.pin.isNotEmpty && authDevice == null) return;
+    final name = request.uri.queryParameters['name'] ?? '';
+    final path = await scrapeEngine.posterPath(name);
+    if (path == null) {
+      await _sendError(request, HttpStatus.notFound, 'not_found', '海报不存在');
+      return;
+    }
+    final file = File(path);
+    final response = request.response;
+    response.statusCode = HttpStatus.ok;
+    response.headers.contentType = _imageContentType(name);
+    // 海报文件按内容哈希命名，内容不会变，可以长缓存。
+    response.headers.set('Cache-Control', 'public, max-age=604800');
+    response.headers.contentLength = await file.length();
+    await response.addStream(file.openRead());
+    await response.close();
+  }
+
+  static ContentType _imageContentType(String name) {
+    if (name.endsWith('.png')) return ContentType('image', 'png');
+    if (name.endsWith('.webp')) return ContentType('image', 'webp');
+    return ContentType('image', 'jpeg');
+  }
+
+  /// 把一批视频按「文件夹」归堆，作为自动刮削的输入。
+  ///
+  /// 与片库的分类规则一致：同一个文件夹里的视频属于同一部剧，只查一次。
+  List<ScrapeFolder> _scrapeFoldersOf(List<MediaEntry> entries) {
+    final rows = groupLibrary(entries);
+    final folders = <ScrapeFolder>[];
+    for (final row in rows) {
+      final paths = row.videos.map((v) => v.relativePath).toList();
+      if (paths.isEmpty) continue;
+      folders.add(ScrapeFolder.of(
+        name: row.name,
+        paths: paths,
+        isFolder: row.isDir,
+      ));
+    }
+    return folders;
+  }
+
+  static List<String> _stringList(Object? raw) {
+    if (raw is! List) return const [];
+    return raw.whereType<String>().where((s) => s.trim().isNotEmpty).toList();
   }
 
   // ---------------------------------------------------------------- 工具
