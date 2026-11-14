@@ -184,6 +184,14 @@ Windows refuses to overwrite a running executable, so the old one is renamed to 
 new one is written and the leftovers are cleaned on the next start; macOS swaps the whole `.app`,
 moving the previous one aside as `<App>.app.old`.
 
+Which `.app` to swap is derived from the location of the running executable, never by looking for the
+first `.app` in the installation directory — on macOS that directory is usually `/Applications`, where
+other people's apps live, and picking the wrong one renames and overwrites a neighbour. An integration
+test guards this: `client/integration_test/macos_update_test.dart` drops a decoy `.app` that sorts
+first into the installation directory and requires it to survive the whole update. The test really
+downloads, really replaces and really exits, so it is skipped by default and turned on with
+`--dart-define=PAVL_TEST_UPDATE=1` (arguments are documented at the top of the file).
+
 ### Where the data lives
 
 Both sides ask whether the program folder is writable, not whether an installer was used — the server
@@ -390,7 +398,9 @@ icon and the native dialogs.
   has already paired with, and only then points the user to
   System Settings → Privacy & Security → Local Network.
 * Douban throttles by IP, so a large library may leave some entries unmatched in a single pass; run it again later.
-* The macOS client's updater is implemented but has not been verified on real hardware yet.
+* Automatic updates arrived in 0.2.4; 0.2.3 and earlier have no entry point, so upgrading once by hand is required.
+* Updating restarts the server, which drops any client that is currently playing. There is no "later" scheduling
+  and no delta update — every update downloads the full package.
 
 ## License
 
