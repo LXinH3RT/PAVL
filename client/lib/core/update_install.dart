@@ -189,6 +189,25 @@ String findPayloadRoot(Directory staged) {
   return File(exe).parent.path;
 }
 
+/// 从可执行文件路径反推它所属的 `.app`（含 `.app` 这一段）。
+///
+/// `.../PAVL.app/Contents/MacOS/PAVL` → `.../PAVL.app`。找不到就返回 null。
+String? _appOfLaunchPath(String launchPath) {
+  final parts = launchPath.split(Platform.pathSeparator);
+  for (var i = parts.length - 1; i >= 0; i--) {
+    if (parts[i].toLowerCase().endsWith(".app")) {
+      return parts.take(i + 1).join(Platform.pathSeparator);
+    }
+  }
+  return null;
+}
+
+/// 当前正在运行的这个 `.app` 本身（不是它的父目录）。
+///
+/// 换包时必须精确认它：安装目录常常就是 `/Applications`，里面装着几十个
+/// 程序，靠「扫第一个 .app」去认会认到别人的应用。
+String? currentAppPath() => _appOfLaunchPath(Platform.resolvedExecutable);
+
 /// 当前本体所在的安装目录。
 ///
 /// Windows 是 exe 所在的那个文件夹；macOS 要往上找到 `.app` 的**父目录**
@@ -209,9 +228,13 @@ String installRootOf() {
 /// 安装目录里那个该被启动的可执行文件。
 String launcherIn(String installRoot) {
   if (Platform.isMacOS) {
-    final app = _findPath(Directory(installRoot), _isApp);
-    if (app != null) return _macExecutableIn(app);
-    // 没找到 .app 就认定安装目录本身是 .app。
+    // 只认「当前正在跑的那个 .app」，不扫安装目录：`/Applications` 里第一个
+    // 命中的可能是 AdGuard 或者 Edge。
+    final app = currentAppPath();
+    if (app != null && Directory(app).parent.path == installRoot) {
+      return _macExecutableIn(app);
+    }
+    // 认不出来的情况（例如已经在 staged 目录里）就当安装目录本身是 .app。
     return _macExecutableIn(installRoot);
   }
   final exe = _findPath(Directory(installRoot), _isExe, maxDepth: 0);
@@ -408,11 +431,18 @@ Future<void> _copyTree(Directory source, Directory target) async {
 }
 
 /// macOS：整个 .app 换掉。先改名腾位置，再用 ditto 搬（保留符号链接）。
+///
+/// 要替换的 `.app` 从 `launchPath` 反推，**不能**去安装目录里扫第一个 `.app`
+/// ——便携形态下安装目录可能就是 `/Applications`，扫出来的很可能是别人的程序。
 Future<void> _replaceMacApp(PendingUpdate pending) async {
-  final installApp = _findPath(Directory(pending.installRoot), _isApp) ??
-      pending.installRoot;
-  final stagedApp =
-      _findPath(Directory(pending.stagedRoot), _isApp) ?? pending.stagedRoot;
+  final installApp = _appOfLaunchPath(pending.launchPath);
+  if (installApp == null) {
+    throw UpdateException("定位不到要替换的 .app。", code: "install");
+  }
+  final stagedApp = _findPath(Directory(pending.stagedRoot), _isApp);
+  if (stagedApp == null) {
+    throw UpdateException("更新包里没有找到 .app。", code: "install");
+  }
   final backup = "$installApp.old";
   if (await Directory(backup).exists()) {
     await Directory(backup).delete(recursive: true);

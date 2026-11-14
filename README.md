@@ -265,7 +265,7 @@ pywin32 把 `client/windows/runner/resources/app_icon.ico` 写进 exe 的 `RT_IC
 python scripts/setup_media_kit_deps.py    # 预置 libmpv 与 ANGLE
 cd client
 flutter pub get
-flutter build windows --release --dart-define=PAVL_VERSION=0.2.3
+flutter build windows --release --dart-define=PAVL_VERSION=0.2.4
 ```
 
 `setup_media_kit_deps.py` 会把 media_kit 需要的 libmpv / ANGLE 预编译包下载到指定位置，避免
@@ -276,7 +276,7 @@ CMake 在构建时联网下载失败。国内网络下这一步尤其必要。
 ```
 cd client
 flutter pub get
-flutter build macos --release --dart-define=PAVL_VERSION=0.2.3
+flutter build macos --release --dart-define=PAVL_VERSION=0.2.4
 ```
 
 版本号写在 `pubspec.yaml` 里，但 Flutter 不会把它编进代码，所以设置页的「关于」要显示版本时

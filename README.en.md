@@ -293,7 +293,7 @@ need the extra step.
 python scripts/setup_media_kit_deps.py    # pre-fetch libmpv and ANGLE
 cd client
 flutter pub get
-flutter build windows --release --dart-define=PAVL_VERSION=0.2.3
+flutter build windows --release --dart-define=PAVL_VERSION=0.2.4
 ```
 
 `setup_media_kit_deps.py` downloads the libmpv and ANGLE prebuilt packages that media_kit needs into the
@@ -310,7 +310,7 @@ the flag does not break the build; the page just falls back to the default value
 ```
 cd client
 flutter pub get
-flutter build macos --release --dart-define=PAVL_VERSION=0.2.3
+flutter build macos --release --dart-define=PAVL_VERSION=0.2.4
 ```
 
 On macOS the libmpv frameworks are fetched by `media_kit_libs_macos_video` during `pod install`, so no

@@ -84,7 +84,7 @@ CLIENT_DIR = ROOT / "client" / "build" / "windows" / "x64" / "runner" / "Release
 MACOS_APP = (
     ROOT / "client" / "build" / "macos" / "Build" / "Products" / "Release" / "PAVL.app"
 )
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 
 # 命名规则见模块说明。软件名固定，其它三段由平台与角色拼出来。
 APP_NAME = "PAVL"
